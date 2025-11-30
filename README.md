@@ -177,7 +177,16 @@ Some require API keys to be active; others (like GLEIF) work unauthenticated wit
 
 ---
 
-## 5. Repo Layout (Very Short)
+## 5. Evidence & hallucination guardrails
+
+Built to behave like an evidence‑backed analyst.
+
+- **Evidence‑first** – The LLM only sees a normalised knowledge graph plus persisted `Source` rows (snippet, URL, provider, `published_date`). The planner is deterministic Python, not an agent.
+- **Per‑section source policy** – Each brief section whitelists which providers it can see (e.g. registries for `founding_details`, people data labs for `founders_and_leadership`, Exa news for `recent_news`, OpenAI agentic search only for `competitors`).
+- **Citations + post‑checks** – Every factual sentence should carry a `[S<ID>]` pointing at a real `sources` row. After generation we (a) drop/repair claims that cite non‑existent IDs, and (b) for number‑heavy sections, force any numeric claim to either gain a citation or be removed. If that still fails, the section is prefixed with `⚠️ UNVERIFIED`.
+- **Injection / noise control** – Long or JSON‑y snippets are summarised in a separate step that must preserve IDs, dates and numbers; obvious prompt‑injection phrases in web text are lightly redacted before reaching the writer.
+
+## 6. Repo Layout (Very Short)
 
 * `backend/` – FastAPI app, Celery worker, connectors, planner, writer, models, migrations.
 * `frontend/` – Next.js UI (research form, job status, archive views).
