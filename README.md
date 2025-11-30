@@ -4,7 +4,7 @@
 A deep research platform with a FastAPI backend and Next.js frontend that produces investor‑grade company briefs.
 
 ---
-
+   ```
 ## 1. Quick Start (Local)
 
 ### Prereqs
@@ -19,8 +19,8 @@ A deep research platform with a FastAPI backend and Next.js frontend that produc
    ```bash
    git clone <repo-url>
    cd serendipity-deep-research
-   ```
 
+   ```
 2. **Create your backend `.env` file**
 
    Copy the example .env and fill in the values I shared:
