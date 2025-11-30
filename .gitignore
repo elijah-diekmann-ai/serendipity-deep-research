@@ -1,0 +1,110 @@
+# ==============================================================================
+# GENERAL / OS FILES
+# ==============================================================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+*.log
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ==============================================================================
+# BACKEND (Python / FastAPI / Celery)
+# ==============================================================================
+backend/__pycache__/
+backend/*/__pycache__/
+backend/*/*/__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / Packaging
+backend/build/
+backend/dist/
+backend/*.egg-info/
+
+# Virtual Environments
+backend/venv/
+backend/.venv/
+backend/env/
+venv/
+.venv/
+
+# Environment Variables & Secrets (CRITICAL)
+backend/.env
+backend/.env.*
+!backend/.env.example
+
+# Celery
+backend/celerybeat-schedule
+backend/celerybeat.pid
+
+# Pytest / Coverage
+backend/.pytest_cache/
+backend/.coverage
+backend/htmlcov/
+
+# Database (Local SQLite or dumps)
+*.sqlite3
+*.db
+backend/*.sql
+
+# Docker (if you mount volumes locally)
+postgres_data/
+
+# ==============================================================================
+# FRONTEND (Next.js / Node / React)
+# ==============================================================================
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/build/
+frontend/dist/
+
+# Environment Variables (CRITICAL)
+frontend/.env
+frontend/.env.local
+frontend/.env.development.local
+frontend/.env.test.local
+frontend/.env.production.local
+
+# Logs
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+frontend/pnpm-debug.log*
+
+# Next.js telemetry
+frontend/.next/
+
+# TypeScript
+frontend/*.tsbuildinfo
+frontend/next-env.d.ts
+
+# Vercel
+frontend/.vercel
+
+# ==============================================================================
+# ROOT / DEPLOYMENT
+# ==============================================================================
+# Ignore root level env files if any
+.env
+.env.*
+
+# Docker specific logs or temp files
+.docker/
+
+# Terraform (if you add IaC later)
+.terraform/
+*.tfstate
+*.tfstate.backup
+
+# Railway specific (keep railway.json usually, but ignore CLI token caches)
+.railway/

@@ -1,0 +1,14 @@
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+SQLAlchemy
+psycopg2-binary
+alembic
+celery[redis]
+redis
+httpx
+tenacity
+python-dotenv
+openai>=1.0.0
+tiktoken

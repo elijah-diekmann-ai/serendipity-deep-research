@@ -1,0 +1,104 @@
+version: '3.8'
+
+services:
+  # 1. Database
+  db:
+    image: postgres:15
+    restart: always
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: serendipity
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d serendipity"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # 2. Redis (Task Queue)
+  redis:
+    image: redis:7
+    restart: always
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # 2.5 Migration Runner (Init Container)
+  migrator:
+    build: ./backend
+    command: alembic upgrade head
+    volumes:
+      - ./backend:/app
+    env_file:
+      - backend/.env
+    environment:
+      DATABASE_URL: postgresql://user:password@db:5432/serendipity
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # 3. Backend API
+  backend:
+    build: ./backend
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - ./backend:/app
+    ports:
+      - "8000:8000"
+    env_file:
+      - backend/.env
+    environment:
+      DATABASE_URL: postgresql://user:password@db:5432/serendipity
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+
+  # 4. Celery Worker (Background Jobs)
+  worker:
+    build: ./backend
+    command: celery -A app.core.celery_app worker --loglevel=info -Q research,celery
+    volumes:
+      - ./backend:/app
+    env_file:
+      - backend/.env
+    environment:
+      DATABASE_URL: postgresql://user:password@db:5432/serendipity
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_started
+      migrator:
+        condition: service_completed_successfully
+
+  # 5. Frontend (Next.js)
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    # volumes:
+    #   - ./frontend:/app
+    #   - /app/node_modules
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000/api
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
