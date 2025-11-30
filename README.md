@@ -1,9 +1,7 @@
-```md
-```
 # Serendipity Deep Research
+
 A deep research platform with a FastAPI backend and Next.js frontend that produces investor‑grade company briefs.
-```
-```
+
 ## 1. Quick Start (Local)
 
 ### Prereqs
@@ -16,7 +14,7 @@ A deep research platform with a FastAPI backend and Next.js frontend that produc
 1. **Clone the repo**
 
    ```bash
-   git clone <https://github.com/elijah-diekmann-ai/serendipity-deep-research>
+   git clone https://github.com/elijah-diekmann-ai/serendipity-deep-research
    cd serendipity-deep-research
 
    ```
@@ -185,5 +183,3 @@ Some require API keys to be active; others (like GLEIF) work unauthenticated wit
 * `frontend/` – Next.js UI (research form, job status, archive views).
 * `docker-compose.yml` – Postgres, Redis, backend, worker, frontend.
 * `README.md` – this file.
-
-```
