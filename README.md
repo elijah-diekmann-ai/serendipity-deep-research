@@ -1,8 +1,9 @@
 ```md
+```
 # Serendipity Deep Research
 
 A deep research platform with a FastAPI backend and Next.js frontend that produces investor‑grade company briefs.
-
+```
 ---
    ```
 ## 1. Quick Start (Local)
@@ -17,7 +18,7 @@ A deep research platform with a FastAPI backend and Next.js frontend that produc
 1. **Clone the repo**
 
    ```bash
-   git clone <repo-url>
+   git clone <https://github.com/elijah-diekmann-ai/serendipity-deep-research>
    cd serendipity-deep-research
 
    ```
