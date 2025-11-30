@@ -4,7 +4,6 @@
 
 A deep research platform with a FastAPI backend and Next.js frontend that produces investor‑grade company briefs.
 ```
----
    ```
 ## 1. Quick Start (Local)
 
