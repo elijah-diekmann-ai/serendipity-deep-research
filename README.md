@@ -52,16 +52,16 @@ A deep research platform with a FastAPI backend and Next.js frontend that produc
 
 This is how each brief section pulls data today, and which connectors are already implemented but currently disabled (missing API key / unpaid).
 
-| Brief Section             | 🟢 Active Connectors (Currently Enabled) | ⚪ Implemented Connectors (Ready but .env unconfigured/Unpaid) |
-| ------------------------- | ---------------------------------------- | ------------------------------------------------------------- |
-| `executive_summary`       | OpenAI, GLEIF, People Data Labs, Exa     | PitchBook, Apollo, Companies House, OpenCorporates            |
-| `founding_details`        | GLEIF, Exa                               | Companies House, OpenCorporates                               |
-| `founders_and_leadership` | People Data Labs                         | Apollo                                                        |
-| `fundraising`             | Exa                                      | PitchBook                                                     |
-| `product`                 | Exa                                      | (None – strictly Exa)                                         |
-| `technology`              | Exa                                      | (None – strictly Exa)                                         |
-| `competitors`             | OpenAI                                   | (None – strictly OpenAI)                                      |
-| `recent_news`             | Exa                                      | (None – strictly Exa)                                         |
+| Brief Section             | 🟢 Active Connectors (Currently Enabled)               | ⚪ Implemented Connectors (Ready but .env unconfigured/Unpaid) |
+| ------------------------- | ------------------------------------------------------ | ------------------------------------------------------------- |
+| `executive_summary`       | OpenAI, GLEIF, People Data Labs, Exa                   | PitchBook, Apollo, Companies House, OpenCorporates            |
+| `founding_details`        | GLEIF, Exa, People Data Labs, OpenAI (Agentic)         | Companies House, OpenCorporates                               |
+| `founders_and_leadership` | People Data Labs                                       | Apollo                                                        |
+| `fundraising`             | Exa, People Data Labs                                  | PitchBook                                                     |
+| `product`                 | Exa                                                    | (None – strictly Exa)                                         |
+| `technology`              | Exa                                                    | (None – strictly Exa)                                         |
+| `competitors`             | OpenAI                                                 | (None – strictly OpenAI)                                      |
+| `recent_news`             | Exa                                                    | (None – strictly Exa)                                         |
 
 * **Implemented** = code is wired up; enabling them is just a matter of adding API keys (and in PitchBook’s case, a paid subscription).
 
@@ -136,14 +136,14 @@ Some require API keys to be active; others (like GLEIF) work unauthenticated wit
 * **OpenAI Web Search (`openai_web.py`)**
   Reasoning‑heavy web search via OpenAI’s `web_search` tool.
 
-  * Used primarily for: **competitor discovery** as of now.
-  * Produces a structured `competitors` list plus supporting snippets.
+  * Used primarily for: **competitor discovery** and **agentic founding details** fallback.
+  * Produces a structured `competitors` list and helps find legal facts (Terms/Privacy/Registries) for non-LEI companies.
 
-* **People Data Labs (`pdl.py`)**
-  Primary **people / leadership** discovery & enrichment.
+* **People Data Labs (`pdl.py` & `pdl_company.py`)**
+  Primary **people / leadership** discovery & enrichment + **company firmographics**.
 
-  * Used for: `founders_and_leadership` section and richer biographies.
-  * Works via Person Search + (optional) Person Enrichment.
+  * Used for: `founders_and_leadership` (bios), `fundraising` (roll-up stats), and `founding_details` (HQ/Year).
+  * Works via Person Search + Company Enrichment.
 
 * **GLEIF (`gleif.py`)**
   Global LEI registry lookup.
