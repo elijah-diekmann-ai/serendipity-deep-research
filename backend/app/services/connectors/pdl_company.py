@@ -96,8 +96,12 @@ class PDLCompanyConnector(BaseConnector):
             f_parts = []
             total = funding_rollup.get("total_funding_raised")
             if total:
-                # Simple formatting
-                f_parts.append(f"total_funding_raised=${total:,.2f}")
+                # Simple formatting with safety check
+                try:
+                    total_num = float(total)
+                    f_parts.append(f"total_funding_raised=${total_num:,.2f}")
+                except (TypeError, ValueError):
+                    f_parts.append(f"total_funding_raised={total}")
             
             rounds = funding_rollup.get("number_funding_rounds")
             if rounds:
