@@ -49,17 +49,11 @@ def normalize_target_input(raw: Dict[str, Any]) -> Dict[str, Any]:
     company_name = str(normalized.get("company_name") or "").strip()
     website = str(normalized.get("website") or "").strip()
     
-    # Heuristic: if company_name looks like a URL and website is empty, swap/move it
+    # Heuristic: If company_name looks like a URL and website is empty, treat it as the website.
     if not website and looks_like_url(company_name):
         website = company_name
-        # If we moved it, we might want to clear company_name or try to extract a name from domain.
-        # For now, let's clear it so we don't search for "www.google.com" as a company name string literallly
-        # unless we want to extract the stem.
-        # Let's keep it simple: if it's a URL, treat it as website. 
-        # We can try to derive a name from the domain later or leave it empty 
-        # (planner handles empty name if website exists).
-        
-        # Actually, let's try to extract a display name from the domain for better UX
+
+        # Attempt to extract a display name from the domain for better UX.
         try:
             if "://" not in website:
                 parsed = urlparse(f"https://{website}")
@@ -70,7 +64,7 @@ def normalize_target_input(raw: Dict[str, Any]) -> Dict[str, Any]:
                 # e.g. www.example.com -> example
                 parts = parsed.netloc.split('.')
                 if len(parts) >= 2:
-                    # naive removal of www and tld
+                    # Simple extraction of domain name
                     if parts[0] == "www":
                         company_name = parts[1]
                     else:
@@ -88,7 +82,7 @@ def normalize_target_input(raw: Dict[str, Any]) -> Dict[str, Any]:
     normalized["website"] = website
 
     # Determine target type
-    # Default to company for now as that's the main use case
+    # Default to company
     target_type: Literal["company", "person", "unknown"] = "company"
     
     # Future extension: detect person intent
@@ -102,10 +96,7 @@ def normalize_target_input(raw: Dict[str, Any]) -> Dict[str, Any]:
         "country_code": raw.get("country_code"),
     }
     
-    # Merge intent fields into the normalized dict (or keep them separate if preferred, 
-    # but instructions say "Preserve original keys so existing planner logic still works")
-    # We'll just ensure the base fields are clean.
-    # The instruction says "Populate target_type... where possible".
+    # Merge intent fields into the normalized dict
     normalized.update(intent_extra)
     
     return normalized

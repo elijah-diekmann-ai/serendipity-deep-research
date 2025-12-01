@@ -1,6 +1,6 @@
 # backend/app/services/connectors/pitchbook.py
 
-# No subscription so idle for now (costly)
+# Requires active subscription.
 
 from __future__ import annotations
 

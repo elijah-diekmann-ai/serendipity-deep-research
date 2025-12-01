@@ -54,7 +54,7 @@ def _domain_core_tokens(domain: str) -> List[str]:
     
     # split by dot
     parts = d.split('.')
-    # exclude TLDs (very naive, just assume last part is TLD)
+    # Simple heuristic: assume last segment is TLD
     if len(parts) > 1:
         parts = parts[:-1]
     
@@ -199,9 +199,7 @@ def _infer_domain(
 
     # 3) Scored Exa-based inference
     if not company_name:
-        # fallback to old majority-domain behaviour, but low confidence
-        # Or just fail if no name and no website provided
-        # Let's try the old majority logic as a last resort
+        # Fallback to domain-majority logic if no name is available.
         domains = [s.get("domain") for s in snippet_candidates if s.get("domain")]
         if domains:
             counts = Counter(d.lower() for d in domains)
