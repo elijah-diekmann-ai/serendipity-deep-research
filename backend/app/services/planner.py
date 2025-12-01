@@ -102,6 +102,7 @@ def _default_plan(target_input: dict) -> List[PlanStep]:
     website = target_input.get("website") or ""
     context = (target_input.get("context") or "").strip()
     domain = _extract_domain(website)
+    legal_name_hint = (target_input.get("legal_name") or "").strip()
 
     subject_parts = [p for p in [company_name, domain] if p]
     subject = " ".join(dict.fromkeys(subject_parts)) or company_name or domain or "target company"
@@ -151,13 +152,41 @@ def _default_plan(target_input: dict) -> List[PlanStep]:
         f"contract valuation post-money{context_hint}"
     )
 
+    # Patent/filing owner aliases to tighten evidence queries
+    patent_owner_aliases = [
+        alias.strip()
+        for alias in dict.fromkeys(
+            [
+                legal_name_hint,
+                company_name,
+                domain,
+            ]
+        )
+        if alias and alias.strip()
+    ]
+    if not patent_owner_aliases and subject:
+        patent_owner_aliases = [subject]
+
+    owner_focus_clause = ""
+    if patent_owner_aliases:
+        owner_focus_terms: List[str] = []
+        for alias in patent_owner_aliases:
+            owner_focus_terms.extend(
+                [
+                    f'assignee "{alias}"',
+                    f'applicant "{alias}"',
+                    f'owner "{alias}"',
+                ]
+            )
+        owner_focus_clause = " " + " ".join(owner_focus_terms)
+
     # Deep evidence: patents, regulatory filings, technical benchmarks, capacity
     deep_evidence_queries: List[str] = [
         (
             f"{subject} patent filings patents EP US WO PCT regulatory filings "
             f"SEC filing 10-K S-1 prospectus clinical trial phase manufacturing "
             f"capacity throughput technical benchmark performance paper standard "
-            f"specification{context_hint}"
+            f"specification{owner_focus_clause}{context_hint}"
         ),
     ]
 

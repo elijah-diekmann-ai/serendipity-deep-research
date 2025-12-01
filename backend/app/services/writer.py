@@ -303,6 +303,63 @@ INJECTION_PHRASES = [
     "you are an ai assistant",
 ]
 
+LEGAL_NAME_SUFFIXES: tuple[str, ...] = (
+    " inc",
+    " incorporated",
+    " llc",
+    " ltd",
+    " limited",
+    " plc",
+    " gmbh",
+    " ag",
+    " s.a.",
+    " s.a.s",
+    " sa",
+    " oy",
+    " kk",
+    " pty",
+    " pty ltd",
+    " pte",
+    " pte ltd",
+    " bv",
+    " nv",
+    " ab",
+    " srl",
+    " spa",
+    " co ltd",
+    " corp",
+    " corporation",
+    " holdings",
+)
+
+PATENT_HEAVY_DOMAINS: set[str] = {
+    "patents.google.com",
+    "worldwide.espacenet.com",
+    "patentscope.wipo.int",
+    "patents.justia.com",
+    "patft.uspto.gov",
+    "appft.uspto.gov",
+    "ppubs.uspto.gov",
+    "uspto.report",
+    "register.epo.org",
+    "lens.org",
+}
+
+PATENT_METADATA_TOKENS: set[str] = {
+    "assignee",
+    "applicant",
+    "owner",
+    "inventor",
+    "publication number",
+    "application number",
+    "priority date",
+    "pct/",
+    "cpc",
+    "ipc",
+}
+
+PATENT_ID_REGEX = re.compile(r"\b(?:US|EP|WO|CN|JP)[A-Z]?\d{4,}\b", re.IGNORECASE)
+
 
 def _snippet_cache_key(raw_text: str) -> str:
     # Hash the *truncated + sanitised* text that we actually send to the LLM
@@ -506,6 +563,9 @@ class Writer:
                 ]
                 filtered = registry_sources + non_registry_sources
 
+        if section_name == "technology" and filtered:
+            filtered = self._filter_patent_sources(filtered, kg)
+
         return filtered
 
     def _filter_recent_news_sources(self, sources: list[Source]) -> list[Source]:
@@ -550,6 +610,125 @@ class Writer:
 
         # If filtering kills everything, fall back to unfiltered sources to avoid empty sections
         return recent or sources
+
+    def _normalise_company_name(self, value: str | None) -> str:
+        if not value:
+            return ""
+        return re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+
+    def _looks_like_legal_name(self, value: str | None) -> bool:
+        if not value:
+            return False
+        cleaned = re.sub(r"\s+", " ", value).strip()
+        if not cleaned:
+            return False
+        if len(cleaned.split()) >= 2:
+            return True
+        lower_cleaned = cleaned.lower()
+        return any(lower_cleaned.endswith(suffix) for suffix in LEGAL_NAME_SUFFIXES)
+
+    def _legal_name_variants(self, kg: KnowledgeGraph) -> list[str]:
+        profile = kg.company.profile or {}
+        candidates: list[str] = []
+
+        def push(val: Any) -> None:
+            if not val:
+                return
+            val_str = str(val).strip()
+            if val_str:
+                candidates.append(val_str)
+
+        push(kg.company.name)
+
+        gleif_company = profile.get("gleif_company") or {}
+        push(gleif_company.get("legal_name"))
+
+        oc_company = profile.get("opencorporates_company") or {}
+        push(oc_company.get("name"))
+        for prev in oc_company.get("previous_names") or []:
+            if isinstance(prev, dict):
+                push(prev.get("company_name") or prev.get("name"))
+            elif isinstance(prev, str):
+                push(prev)
+
+        pdl_company = profile.get("pdl_company") or {}
+        push(pdl_company.get("legal_name"))
+        push(pdl_company.get("name"))
+
+        founding = profile.get("founding_facts_web") or {}
+        push(founding.get("legal_name"))
+
+        variants: list[str] = []
+        seen: Set[str] = set()
+        for candidate in candidates:
+            if not self._looks_like_legal_name(candidate):
+                continue
+            normalized = self._normalise_company_name(candidate)
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            variants.append(normalized)
+        return variants
+
+    def _is_patent_source(self, src: Source) -> bool:
+        domain = (self._source_domain(src) or "").lower()
+        if domain in PATENT_HEAVY_DOMAINS:
+            return True
+
+        combined_text = " ".join(
+            t for t in [(src.title or ""), (src.snippet or "")] if t
+        ).lower()
+        if not combined_text:
+            return False
+
+        if PATENT_ID_REGEX.search(combined_text):
+            return True
+
+        if "patent" in combined_text and any(
+            token in combined_text for token in PATENT_METADATA_TOKENS
+        ):
+            return True
+
+        return False
+
+    def _filter_patent_sources(
+        self, sources: list[Source], kg: KnowledgeGraph
+    ) -> list[Source]:
+        legal_variants = self._legal_name_variants(kg)
+        if not legal_variants:
+            return sources
+
+        filtered: list[Source] = []
+        removed = 0
+
+        for src in sources:
+            if not self._is_patent_source(src):
+                filtered.append(src)
+                continue
+
+            combined_text = " ".join(
+                t for t in [(src.title or ""), (src.snippet or "")] if t
+            )
+            normalized_text = self._normalise_company_name(combined_text)
+
+            if normalized_text and any(
+                variant in normalized_text for variant in legal_variants
+            ):
+                filtered.append(src)
+            else:
+                removed += 1
+
+        if removed:
+            logger.debug(
+                "Filtered %s patent sources without legal-name match",
+                removed,
+                extra={
+                    "job_id": str(self.job_id),
+                    "section": "technology",
+                },
+            )
+
+        return filtered
 
     # -------------------------------------------------------------------------
     # Snippet compression (Async)
