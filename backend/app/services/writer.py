@@ -246,7 +246,7 @@ SECTION_SOURCE_POLICY: dict[str, dict[str, Any]] = {
         # default: all sources (no filter)
     },
     "founding_details": {
-        "allowed_providers": {"exa", "companies_house", "open_corporates"},
+        "allowed_providers": {"exa", "companies_house", "open_corporates", "gleif"},
 
     },
     "founders_and_leadership": {
@@ -446,6 +446,9 @@ class Writer:
             # No policy → all sources available
             return all_sources
 
+        registry_providers = {"companies_house", "open_corporates", "gleif"}
+        is_founding_details = section_name == "founding_details"
+
         allowed_providers: set[str] = {
             p.lower() for p in policy.get("allowed_providers", [])
         }
@@ -482,6 +485,20 @@ class Writer:
 
             # `recent_only` is handled in generate_brief via _filter_recent_news_sources
             filtered.append(src)
+
+        if is_founding_details and filtered:
+            # Check if we have any registry-quality sources
+            has_registry_sources = any(
+                self._normalise_provider(s.provider) in registry_providers
+                for s in filtered
+            )
+            if has_registry_sources:
+                # Keep only registry providers; drop Exa (and any other non-registry providers)
+                filtered = [
+                    s
+                    for s in filtered
+                    if self._normalise_provider(s.provider) in registry_providers
+                ]
 
         return filtered
 
