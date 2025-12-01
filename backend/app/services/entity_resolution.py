@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import List, Optional, Dict, Any, Literal
+from typing import List, Optional, Dict, Any, Literal, Tuple
 from urllib.parse import urlparse
 import logging
+import re
 
 from ..core.config import get_settings
 from .connectors.pdl import PDLConnector
@@ -14,8 +15,90 @@ settings = get_settings()
 logger = logging.getLogger(__name__)
 
 
+NON_CANONICAL_DOMAINS = {
+    "linkedin.com", "www.linkedin.com",
+    "crunchbase.com", "www.crunchbase.com",
+    "pitchbook.com", "www.pitchbook.com",
+    "bloomberg.com", "www.bloomberg.com",
+    "wikipedia.org", "en.wikipedia.org",
+    "twitter.com", "x.com",
+    "facebook.com", "instagram.com",
+    "youtube.com",
+    "glassdoor.com", "www.glassdoor.com",
+    "ycombinator.com", "www.ycombinator.com",
+}
+
+def _normalize_name(s: str) -> str:
+    """
+    Simplify company name for comparison (remove legal suffixes, lowercase).
+    """
+    if not s:
+        return ""
+    s = s.lower().strip()
+    # Remove common legal suffixes
+    s = re.sub(r"\b(inc|llc|ltd|limited|corp|corporation|gmbh|pty|plc)\b\.?", "", s)
+    # Remove special chars
+    s = re.sub(r"[^a-z0-9\s]", "", s)
+    return s.strip()
+
+def _domain_core_tokens(domain: str) -> List[str]:
+    """
+    Extract core tokens from a domain (e.g. "apple.com" -> ["apple"]).
+    """
+    if not domain:
+        return []
+    # remove www. prefix
+    d = domain.lower()
+    if d.startswith("www."):
+        d = d[4:]
+    
+    # split by dot
+    parts = d.split('.')
+    # exclude TLDs (very naive, just assume last part is TLD)
+    if len(parts) > 1:
+        parts = parts[:-1]
+    
+    return parts
+
+def _simple_similarity(name: str, domain: str) -> float:
+    """
+    Check if normalized name appears in domain tokens.
+    Returns 1.0 if exact match, 0.8 if partial match, 0.0 otherwise.
+    """
+    norm_name = _normalize_name(name)
+    if not norm_name:
+        return 0.0
+    
+    domain_tokens = _domain_core_tokens(domain)
+    name_tokens = norm_name.split()
+    
+    # Check if all name tokens appear in domain tokens (order independent)
+    # e.g. "Acme Corp" -> "acme" in "acme.com"
+    
+    match_count = 0
+    for nt in name_tokens:
+        for dt in domain_tokens:
+            if nt in dt or dt in nt:
+                match_count += 1
+                break
+    
+    if match_count == len(name_tokens):
+        return 1.0
+    if match_count > 0:
+        return 0.5 + (0.5 * (match_count / len(name_tokens)))
+        
+    return 0.0
+
 @dataclass
-class PersonNode:
+class DomainCandidate:
+    count: int = 0
+    homepage_hits: int = 0          # URLs that look like root: "/", "", "/home"
+    name_in_domain: float = 0.0     # max similarity of company_name vs domain core
+    name_in_title: int = 0          # does title contain company_name
+    name_in_snippet: int = 0        # snippet contains name
+
+
+def _extract_domain_from_url(url: str) -> Optional[str]:
     """
     In-graph representation of a person.
 
@@ -52,6 +135,8 @@ class CompanyNode:
 
     name: str
     domain: Optional[str] = None
+    domain_confidence: Optional[float] = None
+    domain_source: Optional[str] = None
     companies_house_number: Optional[str] = None
     apollo_organization_id: Optional[str] = None
     apollo_estimated_num_employees: Optional[int | str] = None
@@ -85,14 +170,22 @@ def _infer_domain(
     target_input: Optional[dict],
     apollo_data: dict,
     snippet_candidates: List[Dict[str, Any]],
-) -> Optional[str]:
-    # 1) From explicit website
+) -> Tuple[Optional[str], Optional[str], Optional[float]]:
+    """
+    Returns (domain, source, confidence)
+    """
+    company_name = (
+        (target_input or {}).get("company_name")
+        or apollo_data.get("organization", {}).get("name")
+    )
+
+    # 1) From explicit website (highest trust)
     if target_input:
         website = target_input.get("website")
         if website:
             d = _extract_domain_from_url(website)
             if d:
-                return d.lower()
+                return d.lower(), "user", 0.99
 
     # 2) From Apollo organization
     org = apollo_data.get("organization") or {}
@@ -102,15 +195,99 @@ def _infer_domain(
         or org.get("domain")
     )
     if domain:
-        return str(domain).lower()
+        return str(domain).lower(), "apollo", 0.9
 
-    # 3) From web snippets (majority domain), ignoring obvious connector labels
-    domains = [s.get("domain") for s in snippet_candidates if s.get("domain")]
-    if domains:
-        counts = Counter(d.lower() for d in domains)
-        return counts.most_common(1)[0][0]
+    # 3) Scored Exa-based inference
+    if not company_name:
+        # fallback to old majority-domain behaviour, but low confidence
+        # Or just fail if no name and no website provided
+        # Let's try the old majority logic as a last resort
+        domains = [s.get("domain") for s in snippet_candidates if s.get("domain")]
+        if domains:
+            counts = Counter(d.lower() for d in domains)
+            best = counts.most_common(1)[0][0]
+            return best, "majority_guess", 0.3
+        return None, None, None
 
-    return None
+    # Build candidate map
+    candidates: Dict[str, DomainCandidate] = {}
+    norm_company_name = _normalize_name(company_name)
+
+    for s in snippet_candidates:
+        d = s.get("domain")
+        if not d:
+            continue
+        d = d.lower()
+        if d in NON_CANONICAL_DOMAINS:
+            continue
+        
+        # Also skip subdomains of non-canonical if possible, but exact match is good for now
+        
+        if d not in candidates:
+            candidates[d] = DomainCandidate()
+        
+        cand = candidates[d]
+        cand.count += 1
+        
+        # Homepage hit check
+        url = s.get("url") or ""
+        path = urlparse(url).path
+        if path in ("", "/", "/home", "/index", "/en", "/en/"):
+            cand.homepage_hits += 1
+            
+        # Name in domain
+        sim = _simple_similarity(company_name, d)
+        if sim > cand.name_in_domain:
+            cand.name_in_domain = sim
+            
+        # Name in title/snippet
+        title = (s.get("title") or "").lower()
+        snippet = (s.get("snippet") or "").lower()
+        if norm_company_name in title:
+            cand.name_in_title += 1
+        if norm_company_name in snippet:
+            cand.name_in_snippet += 1
+
+    if not candidates:
+        return None, None, None
+
+    # Score candidates
+    scored = []
+    for d, cand in candidates.items():
+        score = (
+            2.0 * cand.count +
+            3.0 * cand.homepage_hits +
+            4.0 * cand.name_in_domain +
+            1.5 * cand.name_in_title +
+            1.0 * cand.name_in_snippet
+        )
+        scored.append((score, d))
+    
+    scored.sort(key=lambda x: x[0], reverse=True)
+    
+    best_score, best_domain = scored[0]
+    
+    MIN_SCORE = 5.0
+    if best_score < MIN_SCORE:
+        return None, None, None
+        
+    # Ambiguity check
+    normalized_confidence = 0.5
+    if len(scored) > 1:
+        second_score, _ = scored[1]
+        if (best_score - second_score) < 3.0:
+            # ambiguous
+            return None, None, None
+        
+        # Confidence calculation
+        # Cap at 0.85 for inferred domains (Apollo/User are higher)
+        ratio = best_score / (best_score + second_score + 1.0)
+        normalized_confidence = min(0.85, ratio)
+    else:
+        # Only one candidate
+        normalized_confidence = min(0.85, best_score / 10.0)
+
+    return best_domain, "exa", normalized_confidence
 
 
 def _merge_person(existing: PersonNode, new: PersonNode) -> PersonNode:
@@ -431,7 +608,7 @@ def resolve_entities(raw_results: dict, target_input: Optional[dict] = None) -> 
         or "Unknown"
     )
 
-    domain = _infer_domain(
+    domain, domain_source, domain_conf = _infer_domain(
         target_input,
         apollo_data,
         domain_snippet_candidates or web_snippets,
@@ -620,6 +797,8 @@ def resolve_entities(raw_results: dict, target_input: Optional[dict] = None) -> 
     company_node = CompanyNode(
         name=company_name,
         domain=domain,
+        domain_confidence=domain_conf,
+        domain_source=domain_source,
         companies_house_number=ch_company.get("company_number"),
         apollo_organization_id=(
             apollo_org.get("apollo_organization_id")

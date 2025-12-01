@@ -15,6 +15,7 @@ from ..models.person import Person
 from .planner import plan_research
 from .connectors import get_connectors
 from .entity_resolution import resolve_entities, KnowledgeGraph
+from .intent import normalize_target_input
 from .writer import Writer
 from .tracing import trace_job_step
 
@@ -43,6 +44,8 @@ def _persist_company_and_people(db: Session, kg: KnowledgeGraph) -> None:
                 company = Company(
                     name=company_node.name,
                     domain=company_node.domain,
+                    domain_confidence=company_node.domain_confidence,
+                    domain_source=company_node.domain_source,
                 )
                 db.add(company)
                 db.flush()
@@ -64,6 +67,12 @@ def _persist_company_and_people(db: Session, kg: KnowledgeGraph) -> None:
         identifiers["apollo_organization"] = company_node.apollo_organization_id
     company.identifiers = identifiers or None
     company.profile_data = company_node.profile or {}
+    
+    # Update confidence fields if they changed (e.g. re-resolved with better confidence)
+    if company_node.domain_confidence is not None:
+        company.domain_confidence = company_node.domain_confidence
+    if company_node.domain_source:
+        company.domain_source = company_node.domain_source
 
     db.add(company)
     db.flush()
@@ -122,7 +131,8 @@ def run_research_job(self, job_id: str):
         if not job:
             return
 
-        target_input = job.target_input or {}
+        raw_target_input = job.target_input or {}
+        target_input = normalize_target_input(raw_target_input)
         request_id = target_input.get("request_id")
 
         trace_job_step(

@@ -212,6 +212,22 @@ def _default_plan(target_input: dict) -> List[PlanStep]:
 
     steps: List[PlanStep] = []
 
+    # --- Step 0: Identity search (if no website provided) ---
+    # High-precision search to resolve the official domain if the user didn't provide one.
+    if company_name and not website and not domain:
+        steps.append(
+            {
+                "name": "search_exa_identity",
+                "connector": "exa",
+                "params": {
+                    "mode": "search",
+                    "queries": [f"{company_name} official website home page"],
+                    "category": "company",
+                    "num_results": 5,
+                },
+            }
+        )
+
     # --- Step 1: Deep crawl of the company website (Exa) ---
     if site_queries:
         exa_params_site: Dict[str, Any] = {

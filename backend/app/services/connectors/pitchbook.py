@@ -1,5 +1,7 @@
 # backend/app/services/connectors/pitchbook.py
 
+# No subscription so idle for now (costly)
+
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional

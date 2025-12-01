@@ -1391,6 +1391,8 @@ Output 3–6 short bullet points or a compact paragraph (max ~140 words).
             | {
                 "name": kg.company.name,
                 "domain": kg.company.domain,
+                "domain_confidence": kg.company.domain_confidence,
+                "domain_source": kg.company.domain_source,
                 "companies_house_number": kg.company.companies_house_number,
                 "funding_rounds": kg.company.funding_rounds,  # NEW
             },
