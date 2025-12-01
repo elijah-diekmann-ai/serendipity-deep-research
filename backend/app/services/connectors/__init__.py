@@ -10,6 +10,7 @@ from .companies_house import CompaniesHouseConnector
 from .apollo import ApolloConnector
 from .openai_web import OpenAIWebSearchConnector
 from .pdl import PDLConnector
+from .pdl_company import PDLCompanyConnector
 from .opencorporates import OpenCorporatesConnector
 from .gleif import GLEIFConnector
 from .pitchbook import PitchbookConnector
@@ -31,14 +32,14 @@ class ConnectorRunner:
         # search) can be added here without changing the orchestrator.
         self._connectors: Dict[str, BaseConnector] = {
             "exa": ExaConnector(),
-            "companies_house": CompaniesHouseConnector(),
-            "apollo": ApolloConnector(),
-            # Reasoning-first web search connector backed by OpenAI Responses API.
-            "openai_web": OpenAIWebSearchConnector(),
-            # People Data Labs for leadership discovery (free tier available)
-            "pdl": PDLConnector(),
-            "open_corporates": OpenCorporatesConnector(),
             "gleif": GLEIFConnector(),
+            "openai_web": OpenAIWebSearchConnector(),
+            "pdl": PDLConnector(),              # People discovery (persons)
+            "pdl_company": PDLCompanyConnector(),  # NEW
+            # retained for future use:
+            "companies_house": CompaniesHouseConnector(),
+            "open_corporates": OpenCorporatesConnector(),
+            "apollo": ApolloConnector(),
             "pitchbook": PitchbookConnector(),
         }
 

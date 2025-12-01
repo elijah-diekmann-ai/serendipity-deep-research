@@ -1,3 +1,5 @@
+# backend/app/services/entity_resolution.py
+
 from __future__ import annotations
 
 import asyncio
@@ -98,7 +100,8 @@ class DomainCandidate:
     name_in_snippet: int = 0        # snippet contains name
 
 
-def _extract_domain_from_url(url: str) -> Optional[str]:
+@dataclass
+class PersonNode:
     """
     In-graph representation of a person.
 
@@ -169,6 +172,7 @@ def _extract_domain_from_url(url: str) -> Optional[str]:
 def _infer_domain(
     target_input: Optional[dict],
     apollo_data: dict,
+    pdl_company: dict,
     snippet_candidates: List[Dict[str, Any]],
 ) -> Tuple[Optional[str], Optional[str], Optional[float]]:
     """
@@ -177,6 +181,7 @@ def _infer_domain(
     company_name = (
         (target_input or {}).get("company_name")
         or apollo_data.get("organization", {}).get("name")
+        or pdl_company.get("name")
     )
 
     # 1) From explicit website (highest trust)
@@ -187,7 +192,14 @@ def _infer_domain(
             if d:
                 return d.lower(), "user", 0.99
 
-    # 2) From Apollo organization
+    # 2) From PDL Company (highly reliable as it's an enrichment match)
+    pdl_website = pdl_company.get("website")
+    if pdl_website:
+        d = _extract_domain_from_url(pdl_website)
+        if d:
+            return d.lower(), "pdl_company", 0.90
+
+    # 3) From Apollo organization
     org = apollo_data.get("organization") or {}
     domain = (
         org.get("primary_domain")
@@ -197,7 +209,7 @@ def _infer_domain(
     if domain:
         return str(domain).lower(), "apollo", 0.9
 
-    # 3) Scored Exa-based inference
+    # 4) Scored Exa-based inference
     if not company_name:
         # Fallback to domain-majority logic if no name is available.
         domains = [s.get("domain") for s in snippet_candidates if s.get("domain")]
@@ -593,6 +605,9 @@ def resolve_entities(raw_results: dict, target_input: Optional[dict] = None) -> 
     oc_company = oc_data.get("company") or {}
     gleif_data = raw_results.get("gleif_lookup", {}) or {}
     gleif_company = gleif_data.get("company") or {}
+    pdl_company_data = raw_results.get("pdl_company_enrich", {}) or {}
+    pdl_company = pdl_company_data.get("company") or {}
+    openai_founding = raw_results.get("openai_founding", {}) or {}
 
     ch_company = ch_data.get("company", {}) or {}
     apollo_org = apollo_data.get("organization") or {}
@@ -600,8 +615,9 @@ def resolve_entities(raw_results: dict, target_input: Optional[dict] = None) -> 
     company_name = (
         ch_company.get("company_name")
         or oc_company.get("name")
-        or gleif_company.get("legal_name")  # NEW
+        or gleif_company.get("legal_name")
         or apollo_org.get("name")
+        or pdl_company.get("name")
         or (target_input or {}).get("company_name")
         or "Unknown"
     )
@@ -609,6 +625,7 @@ def resolve_entities(raw_results: dict, target_input: Optional[dict] = None) -> 
     domain, domain_source, domain_conf = _infer_domain(
         target_input,
         apollo_data,
+        pdl_company,
         domain_snippet_candidates or web_snippets,
     )
 
@@ -791,6 +808,32 @@ def resolve_entities(raw_results: dict, target_input: Optional[dict] = None) -> 
         }
         profile["apollo_organization"] = firmographics
         profile["apollo_firmographics"] = firmographics
+
+    # PDL Company profile & Funding
+    if pdl_company:
+        profile["pdl_company"] = pdl_company
+    
+    pdl_funding_rollup = pdl_company_data.get("funding_rollup")
+    if pdl_funding_rollup:
+        profile["pdl_funding_rollup"] = pdl_funding_rollup
+
+    pdl_funding_details = pdl_company_data.get("funding_details") or []
+    if pdl_funding_details:
+        for fd in pdl_funding_details:
+            funding_rounds_structured.append({
+                "date": fd.get("funding_round_date"),
+                "amount": fd.get("funding_raised"),
+                "currency": fd.get("funding_currency"),
+                "type": fd.get("funding_type"),
+                "investors_companies": fd.get("investing_companies") or [],
+                "investors_individuals": fd.get("investing_individuals") or [],
+                "source": "pdl_company"
+            })
+
+    # OpenAI Founding Facts fallback
+    founding_facts = openai_founding.get("founding_facts")
+    if founding_facts:
+        profile["founding_facts_web"] = founding_facts
 
     company_node = CompanyNode(
         name=company_name,

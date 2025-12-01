@@ -15,7 +15,8 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 # Allowed connectors for the deterministic planner
-ALLOWED_CONNECTORS = {"exa", "companies_house", "apollo", "openai_web", "pdl", "open_corporates", "gleif", "pitchbook"}
+ALLOWED_CONNECTORS = {"exa", "gleif", "openai_web", "pdl", "pdl_company"}
+# retain others in codebase but we will not schedule them here
 
 MAX_PLANNER_STEPS = 10
 # Global cap on total Exa query strings across all Exa steps
@@ -92,8 +93,8 @@ def _default_plan(target_input: dict) -> List[PlanStep]:
           routed to the `openai_web` connector, which uses OpenAI's web_search
           tool + reasoning to propose a curated competitor set.
 
-    - Maintain optional registry / enrichment connectors (Companies House,
-      Apollo) for structured identifiers and leadership data.
+    - Maintain optional registry / enrichment connectors (GLEIF, PDL) for
+      structured identifiers and leadership data.
 
     NOTE: We explicitly do NOT use Exa for competitor discovery anymore.
     """
@@ -143,14 +144,12 @@ def _default_plan(target_input: dict) -> List[PlanStep]:
         ),
     ]
 
-    # Fundraising (history of rounds, investors, valuations, plus non-dilutive)
-    funding_queries: List[str] = [
-        (
-            f"{subject} funding history funding rounds seed series A series B "
-            f"venture capital equity financing grants government programs non-dilutive "
-            f"capital revenue ARR MRR headcount valuation{context_hint}"
-        ),
-    ]
+    # Funding query (single query string to keep under MAX_EXA_QUERIES)
+    funding_query = (
+        f"{subject} funding pre-seed seed series A series B series C "
+        f"bridge extension convertible note SAFE grant SBIR NIH NSF DARPA "
+        f"contract valuation post-money{context_hint}"
+    )
 
     # Deep evidence: patents, regulatory filings, technical benchmarks, capacity
     deep_evidence_queries: List[str] = [
@@ -177,7 +176,8 @@ def _default_plan(target_input: dict) -> List[PlanStep]:
 
     # Enforce global query cap while prioritising core coverage:
     # 1) company site  2) funding  3) deep evidence  4) news
-    total_queries = site_queries + funding_queries + deep_evidence_queries + news_queries
+    # Note: Funding now uses 2 steps but 1 query string each.
+    total_queries = site_queries + [funding_query] + deep_evidence_queries + news_queries
 
     if len(total_queries) > MAX_EXA_QUERIES:
         remaining = MAX_EXA_QUERIES
@@ -185,20 +185,22 @@ def _default_plan(target_input: dict) -> List[PlanStep]:
         # Site queries are highest priority
         if len(site_queries) > remaining:
             site_queries = site_queries[:remaining]
-            funding_queries = []
+            # No budget for others
+            funding_query = ""
             deep_evidence_queries = []
             news_queries = []
         else:
             remaining -= len(site_queries)
 
-            # Funding next
-            if len(funding_queries) > remaining:
-                funding_queries = funding_queries[:remaining]
+            # Funding next (1 query)
+            if remaining > 0:
+                remaining -= 1
+            else:
+                funding_query = ""
                 deep_evidence_queries = []
                 news_queries = []
-            else:
-                remaining -= len(funding_queries)
 
+            if remaining > 0:
                 # Deep evidence next
                 if len(deep_evidence_queries) > remaining:
                     deep_evidence_queries = deep_evidence_queries[:remaining]
@@ -257,11 +259,22 @@ def _default_plan(target_input: dict) -> List[PlanStep]:
             }
         )
 
-    # --- Step 2: Funding / fundraising history (Exa) ---
-    if funding_queries:
-        exa_params_funding: Dict[str, Any] = {
+    # --- Step 1.5: PDL Company Enrich ---
+    if company_name:
+        steps.append({
+            "name": "pdl_company_enrich",
+            "connector": "pdl_company",
+            "params": {
+                "website": domain,  # if known
+                "company_name": company_name,
+            },
+        })
+
+    # --- Step 2: Fundraising (Split into Official vs External) ---
+    if funding_query:
+        exa_funding_common = {
             "mode": "search",
-            "queries": funding_queries,
+            "queries": [funding_query],
             "category": "news",
             "start_published_date": funding_start_date,
             "highlights_query": (
@@ -270,14 +283,35 @@ def _default_plan(target_input: dict) -> List[PlanStep]:
                 "non-dilutive funding, and any disclosed revenue/ARR, growth, "
                 "headcount, or profitability metrics."
             ),
+            "exclude_domains": [
+                "pitchbook.com",
+                "opencorporates.com",
+                "find-and-update.company-information.service.gov.uk",
+                "companieshouse.gov.uk",
+                "apollo.io",
+            ],
         }
-        steps.append(
-            {
-                "name": "search_exa_fundraising",
+
+        if domain:
+            steps.append({
+                "name": "search_exa_fundraising_official",
                 "connector": "exa",
-                "params": exa_params_funding,
-            }
-        )
+                "params": exa_funding_common | {
+                   "include_domains": [domain],
+                },
+            })
+
+        steps.append({
+            "name": "search_exa_fundraising_external",
+            "connector": "exa",
+            "params": exa_funding_common | {
+                "include_domains": [
+                    "businesswire.com", "prnewswire.com", "globenewswire.com",
+                    "techcrunch.com", "venturebeat.com", "sifted.eu",
+                    "wsj.com", "ft.com", "reuters.com"
+                ],
+            },
+        })
 
     # --- Step 3: Deep evidence (patents, regulatory filings, benchmarks) (Exa) ---
     if deep_evidence_queries:
@@ -336,55 +370,34 @@ def _default_plan(target_input: dict) -> List[PlanStep]:
                 },
             }
         )
+    
+    # --- Step 6: Founding facts fallback (Agentic OpenAI) ---
+    steps.append({
+        "name": "openai_founding",
+        "connector": "openai_web",
+        "params": {
+            "mode": "founding",
+            "company_name": company_name,
+            "website": website,
+            "context": context,
+        },
+    })
 
     # -------------------------------------------------------------------------
     # Supplemental Connectors
     # -------------------------------------------------------------------------
 
-    if getattr(settings, "COMPANIES_HOUSE_API_KEY", None) and company_name:
-        steps.append(
-            {
-                "name": "companies_house_lookup",
-                "connector": "companies_house",
-                "params": {"query": company_name},
-            }
-        )
-
-    # OpenCorporates registry lookup – used primarily for Founding Details section
-    if getattr(settings, "OPENCORPORATES_API_TOKEN", None) and company_name:
-        oc_params: Dict[str, Any] = {"company_name": company_name}
-
-        # Optional: pass through hints if target_input is extended later
-        jurisdiction_hint = target_input.get("jurisdiction_code")
-        country_hint = target_input.get("country_code")
-        if jurisdiction_hint:
-            oc_params["jurisdiction_code"] = jurisdiction_hint
-        if country_hint:
-            oc_params["country_code"] = country_hint
-
-        steps.append(
-            {
-                "name": "open_corporates_lookup",
-                "connector": "open_corporates",
-                "params": oc_params,
-            }
-        )
-
-    # GLEIF LEI / legal-entity registry lookup – used for Founding Details
-    # Only requires company_name (and optionally country/jurisdiction hints).
+    # GLEIF LEI / legal-entity registry lookup
     gleif_enabled = getattr(settings, "GLEIF_ENABLED", True)
 
     if gleif_enabled and company_name:
         gleif_params: Dict[str, Any] = {"company_name": company_name}
-
+        
         # Optionally propagate hints from target_input
         country_hint = target_input.get("country_code")
         if country_hint:
             gleif_params["country_code"] = country_hint
 
-        # Optional future fields in target_input:
-        # - "lei": explicit LEI if user has it
-        # - "bic": BIC if user has it
         if "lei" in target_input:
             gleif_params["lei"] = target_input["lei"]
         if "bic" in target_input:
@@ -399,54 +412,22 @@ def _default_plan(target_input: dict) -> List[PlanStep]:
         )
 
     # -------------------------------------------------------------------------
-    # PitchBook fundraising data (optional, if configured)
+    # People Discovery: PDL
     # -------------------------------------------------------------------------
-
-    pitchbook_key = getattr(settings, "PITCHBOOK_API_KEY", None)
-
-    if pitchbook_key and (company_name or domain):
-        steps.append(
-            {
-                "name": "pitchbook_fundraising",
-                "connector": "pitchbook",
-                "params": {
-                    "company_name": company_name,
-                    "company_domain": domain,
-                },
-            }
-        )
-
-    # -------------------------------------------------------------------------
-    # People Discovery: Apollo and/or PDL
-    # -------------------------------------------------------------------------
-    # We prioritize PDL if configured (works on free tier + strong LinkedIn data).
-    # If PDL is missing, we fall back to Apollo if available.
-
+    
     people_params: Dict[str, Any] = {}
     if domain:
         people_params["company_domain"] = domain
     if company_name:
         people_params["company_name"] = company_name
 
-    # PDL: works on free tier (100 matches/month), has LinkedIn-derived data
     pdl_key = getattr(settings, "PDL_API_KEY", None)
-    apollo_key = getattr(settings, "APOLLO_API_KEY", None)
 
     if pdl_key and people_params:
         steps.append(
             {
                 "name": "pdl_people_discovery",
                 "connector": "pdl",
-                "params": people_params.copy(),
-            }
-        )
-    # Only fall back to Apollo if PDL is NOT configured or if we want redundancy
-    # (For now we treat them as either/or to save tokens/calls unless explicitly both wanted)
-    elif apollo_key and people_params:
-        steps.append(
-            {
-                "name": "people_enrichment",
-                "connector": "apollo",
                 "params": people_params.copy(),
             }
         )
@@ -464,14 +445,11 @@ def plan_research(target_input: dict) -> List[PlanStep]:
     - Hit the company website (with subpages) for founding, HQ, identifiers,
       team, product, and tech (Exa).
     - Pull recent news from the open web (Exa).
-    - Identify people associated with the company:
-      * Apollo: org firmographics + people (requires paid plan)
-      * PDL: leadership discovery with work history/education (free tier available)
-    - Funding from Companies House, eventually Pitchbook, OpenCorporates (if configured)
+    - Identify people associated with the company (PDL).
+    - Funding from Exa (official + external).
     - Call /search for deep evidence (patents, regulatory filings, specs) (Exa).
-    - Call the `openai_web` connector to obtain a reasoned competitor short-list
-      (sole input to the Competitors section).
-    - Enrich Apollo-discovered people with PDL for deeper biography data
+    - Call the `openai_web` connector to obtain a reasoned competitor short-list.
+    - Use `pdl_company` for firmographics.
     """
     try:
         plan = _default_plan(target_input)

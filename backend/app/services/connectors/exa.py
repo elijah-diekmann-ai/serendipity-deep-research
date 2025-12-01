@@ -88,6 +88,7 @@ class ExaConnector(BaseConnector):
         self,
         query: str,
         include_domains: Optional[List[str]] = None,
+        exclude_domains: Optional[List[str]] = None,
         start_published_date: Optional[str] = None,
         end_published_date: Optional[str] = None,
         category: Optional[str] = None,
@@ -148,6 +149,9 @@ class ExaConnector(BaseConnector):
 
         if include_domains:
             payload["includeDomains"] = include_domains
+
+        if exclude_domains:
+            payload.setdefault("excludeDomains", []).extend(exclude_domains)
 
         if start_published_date:
             payload["startPublishedDate"] = start_published_date
@@ -214,6 +218,7 @@ class ExaConnector(BaseConnector):
         client: httpx.AsyncClient,
         query: str,
         include_domains: Optional[List[str]] = None,
+        exclude_domains: Optional[List[str]] = None,
         start_published_date: Optional[str] = None,
         end_published_date: Optional[str] = None,
         category: Optional[str] = None,
@@ -226,6 +231,8 @@ class ExaConnector(BaseConnector):
         cache_parts: List[str] = ["search", query]
         if include_domains:
             cache_parts.append("domains:" + ",".join(sorted(include_domains)))
+        if exclude_domains:
+            cache_parts.append("exclude:" + ",".join(sorted(exclude_domains)))
         if start_published_date:
             cache_parts.append(f"start:{start_published_date}")
         if end_published_date:
@@ -241,6 +248,7 @@ class ExaConnector(BaseConnector):
         payload = self._build_search_payload(
             query=query,
             include_domains=include_domains,
+            exclude_domains=exclude_domains,
             start_published_date=start_published_date,
             end_published_date=end_published_date,
             category=category,
@@ -409,6 +417,16 @@ class ExaConnector(BaseConnector):
                         if isinstance(d, str) and d.strip()
                     ] or None
 
+                exclude_domains = params.get("exclude_domains")
+                if isinstance(exclude_domains, str):
+                    exclude_domains = [exclude_domains]
+                if exclude_domains is not None:
+                    exclude_domains = [
+                        d.strip()
+                        for d in exclude_domains
+                        if isinstance(d, str) and d.strip()
+                    ] or None
+
                 start_published_date = params.get("start_published_date")
                 end_published_date = params.get("end_published_date")
                 category = params.get("category")
@@ -422,6 +440,7 @@ class ExaConnector(BaseConnector):
                         client,
                         q,
                         include_domains=include_domains,
+                        exclude_domains=exclude_domains,
                         start_published_date=start_published_date,
                         end_published_date=end_published_date,
                         category=category,

@@ -1,3 +1,5 @@
+# backend/app/services/connectors/openai_web.py
+
 from __future__ import annotations
 
 import asyncio
@@ -47,25 +49,9 @@ class OpenAIWebSearchConnector(BaseConnector):
              ...
           ],
           # Optional structured extras used by downstream components:
-          "competitors": [
-             {
-               "name": ...,
-               "website": ...,
-               "category": "direct" | "adjacent" | "substitute",
-               "summary": ...,
-               "why_relevant": ...,
-               "tech_and_moat": ...,
-               "geo_focus": ...,
-             },
-             ...
-          ]
+          "competitors": [ ... ],
+          "founding_facts": { ... }
         }
-
-    Notes:
-    - We intentionally *do not* expose raw OpenAI web search result URLs directly
-      here; instead the model consolidates them into a higher-level competitor
-      list which is then turned into our snippets. This keeps the connector
-      boundary clean while still providing the Writer with rich, reasoned input.
     """
 
     name = "openai_web"
@@ -97,11 +83,6 @@ class OpenAIWebSearchConnector(BaseConnector):
     ) -> str:
         """
         Prompt for agentic competitor discovery.
-
-        We ask the model to:
-        - Use web_search.
-        - Focus on *true* competitors rather than generic companies in the same space.
-        - Return a strict JSON structure that we can parse robustly.
         """
         target_desc_lines = []
         if company_name:
@@ -143,6 +124,65 @@ class OpenAIWebSearchConnector(BaseConnector):
             "- Only include competitors that you can justify from the web search results.\n"
             "- Do NOT include the target company itself.\n"
             "- If you are uncertain whether an entity is a competitor, leave it out.\n"
+            "- The response must be valid JSON. Do not include comments, markdown, or prose outside the JSON.\n\n"
+            f"TARGET COMPANY INFORMATION:\\n{target_block}\n"
+        )
+
+    def _build_founding_prompt(
+        self,
+        company_name: str,
+        website: str,
+        context: str,
+    ) -> str:
+        """
+        Prompt for finding strict legal/founding facts when registries (GLEIF) are missing.
+        """
+        target_desc_lines = []
+        if company_name:
+            target_desc_lines.append(f"- Name: {company_name}")
+        if website:
+            target_desc_lines.append(f"- Website: {website}")
+        if context:
+            target_desc_lines.append(f"- Additional context: {context}")
+        target_block = "\\n".join(target_desc_lines) if target_desc_lines else "N/A"
+
+        return (
+            "You are a corporate research assistant helping to establish the legal identity of a company.\n\n"
+            "Use the web_search tool to find definitive legal/corporate facts about the target company.\n"
+            "Prioritise the following sources for evidence:\n"
+            "- The company's own legal pages (Terms, Privacy, Imprint/Impressum, Legal).\n"
+            "- University tech-transfer or spin-out pages (if applicable).\n"
+            "- SEC/EDGAR filings (10-K, S-1) or other credible government/regulatory portals.\n"
+            "- Government grant portals (SBIR, NIH, NSF, etc.).\n\n"
+            "Extract the following fields if visible in credible sources:\n"
+            "- legal_name: The full legal entity name (e.g. 'Acme Robotics, Inc.').\n"
+            "- incorporation_date: The date of incorporation (YYYY-MM-DD) if explicitly stated.\n"
+            "- jurisdiction: Country and state/region of incorporation.\n"
+            "- registered_address: The full registered office address.\n"
+            "- registration_numbers: Any corporate IDs (company number, EIN, ABN, CIK, etc.) with system name.\n"
+            "- hq: The headquarters city/region/country.\n"
+            "- origin_context: Brief note if it is a spin-out, carve-out, or university project.\n"
+            "- ownership_notes: Brief note on ownership structure if visible.\n\n"
+            "Also capture the specific URLs where you found these facts as 'evidence'.\n\n"
+            "Return your answer as a single JSON object with this exact shape:\n"
+            "{\n"
+            '  "founding_facts": {\n'
+            '    "legal_name": "...",\n'
+            '    "incorporation_date": "YYYY-MM-DD" | null,\n'
+            '    "jurisdiction": "..." | null,\n'
+            '    "registered_address": "..." | null,\n'
+            '    "registration_numbers": [{"system": "...", "id": "..."}] | [],\n'
+            '    "hq": "..." | null,\n'
+            '    "origin_context": "..." | null,\n'
+            '    "ownership_notes": "..." | null\n'
+            "  },\n"
+            '  "evidence": [\n'
+            '    {"url": "...", "title": "...", "snippet": "..."}\n'
+            "  ]\n"
+            "}\n\n"
+            "CRITICAL RULES:\n"
+            "- Only return facts you can verify with a citation.\n"
+            "- If a field is not found, set it to null (or empty list).\n"
             "- The response must be valid JSON. Do not include comments, markdown, or prose outside the JSON.\n\n"
             f"TARGET COMPANY INFORMATION:\\n{target_block}\n"
         )
@@ -211,6 +251,37 @@ class OpenAIWebSearchConnector(BaseConnector):
             )
         return normalised
 
+    def _parse_founding_json(self, raw: str) -> Dict[str, Any]:
+        """
+        Robustly extract 'founding_facts' and 'evidence' from a JSON-ish string.
+        """
+        if not raw:
+            return {}
+
+        data: Dict[str, Any] = {}
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            start = raw.find("{")
+            end = raw.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                try:
+                    data = json.loads(raw[start : end + 1])
+                except json.JSONDecodeError:
+                    logger.warning("OpenAIWebSearchConnector: failed to parse founding JSON.")
+                    return {}
+
+        # Basic validation
+        founding_facts = data.get("founding_facts")
+        evidence = data.get("evidence")
+
+        if not isinstance(founding_facts, dict):
+            founding_facts = {}
+        if not isinstance(evidence, list):
+            evidence = []
+
+        return {"founding_facts": founding_facts, "evidence": evidence}
+
     def _competitors_to_snippets(self, competitors: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Turn structured competitors into snippet objects for downstream use.
@@ -255,6 +326,38 @@ class OpenAIWebSearchConnector(BaseConnector):
             )
         return snippets
 
+    def _founding_evidence_to_snippets(self, evidence: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Turn founding evidence list into standard snippets.
+        """
+        snippets: List[Dict[str, Any]] = []
+        for item in evidence:
+            if not isinstance(item, dict):
+                continue
+            url = item.get("url")
+            title = item.get("title") or "Founding Evidence"
+            snippet_text = item.get("snippet") or ""
+
+            domain = None
+            if url:
+                try:
+                    parsed = urlparse(url if "://" in url else "https://" + url)
+                    domain = parsed.netloc or None
+                except Exception:
+                    domain = None
+
+            snippets.append(
+                {
+                    "url": url,
+                    "title": title,
+                    "snippet": snippet_text,
+                    "domain": domain,
+                    "provider": "openai-web",
+                    "published_date": None,
+                }
+            )
+        return snippets
+
     # ------------------------------------------------------------------
     # Core fetch
     # ------------------------------------------------------------------
@@ -265,14 +368,15 @@ class OpenAIWebSearchConnector(BaseConnector):
 
         Supported modes (params["mode"]):
         - "competitors": high-level competitor discovery for the target company.
+        - "founding": deep search for legal/corporate identity facts.
 
-        Additional params for mode=="competitors":
+        Additional params:
         - company_name: str
         - website: str
         - context: str (optional free-form description from the user)
 
         Returns:
-            ConnectorResult({"snippets": [...], "competitors": [...]})
+            ConnectorResult({"snippets": [...], "competitors": [...], "founding_facts": {...}})
         """
         if not self._has_credentials():
             logger.info(
@@ -281,20 +385,11 @@ class OpenAIWebSearchConnector(BaseConnector):
             return ConnectorResult({})
 
         mode = (params.get("mode") or "competitors").lower()
-        if mode != "competitors":
-            # For now we only implement competitor discovery; the planner is
-            # wired so that this connector is only used for that purpose.
-            logger.warning(
-                "OpenAIWebSearchConnector called with unsupported mode '%s'; returning empty result.",
-                mode,
-            )
-            return ConnectorResult({})
-
         company_name = str(params.get("company_name") or "").strip()
         website = str(params.get("website") or "").strip()
         context = str(params.get("context") or "").strip()
 
-        cache_key_parts = ["openai_web", "competitors"]
+        cache_key_parts = ["openai_web", mode]
         if company_name:
             cache_key_parts.append(f"name:{company_name.lower()}")
         if website:
@@ -305,7 +400,17 @@ class OpenAIWebSearchConnector(BaseConnector):
         if cached is not None:
             return ConnectorResult(cached)
 
-        prompt = self._build_competitor_prompt(company_name, website, context)
+        # Dispatch prompt generation based on mode
+        if mode == "competitors":
+            prompt = self._build_competitor_prompt(company_name, website, context)
+        elif mode == "founding":
+            prompt = self._build_founding_prompt(company_name, website, context)
+        else:
+            logger.warning(
+                "OpenAIWebSearchConnector called with unsupported mode '%s'; returning empty result.",
+                mode,
+            )
+            return ConnectorResult({})
 
         def _call_openai_sync() -> Dict[str, Any]:
             assert OpenAI is not None  # guarded in _has_credentials
@@ -321,7 +426,7 @@ class OpenAIWebSearchConnector(BaseConnector):
                 )
             except Exception as e:
                 logger.exception("OpenAI web_search call failed: %s", e)
-                return {"snippets": [], "competitors": []}
+                return {}
 
             # Prefer the convenient helper if available
             raw_text: Optional[str] = getattr(response, "output_text", None)
@@ -340,18 +445,26 @@ class OpenAIWebSearchConnector(BaseConnector):
                 except Exception:
                     raw_text = None
 
-            competitors = self._parse_competitor_json(raw_text or "")
-            snippets = self._competitors_to_snippets(competitors)
-
-            return {
-                "snippets": snippets,
-                "competitors": competitors,
-            }
+            if mode == "competitors":
+                competitors = self._parse_competitor_json(raw_text or "")
+                snippets = self._competitors_to_snippets(competitors)
+                return {
+                    "snippets": snippets,
+                    "competitors": competitors,
+                }
+            elif mode == "founding":
+                parsed = self._parse_founding_json(raw_text or "")
+                snippets = self._founding_evidence_to_snippets(parsed.get("evidence", []))
+                return {
+                    "snippets": snippets,
+                    "founding_facts": parsed.get("founding_facts", {}),
+                }
+            return {}
 
         result: Dict[str, Any] = await asyncio.to_thread(_call_openai_sync)
 
-        # Cache for 24h – competitor set is relatively stable.
-        await cached_get(cache_key, set_value=result, ttl=60 * 60 * 24)
+        if result:
+            # Cache for 24h – competitor set and founding facts are relatively stable.
+            await cached_get(cache_key, set_value=result, ttl=60 * 60 * 24)
 
         return ConnectorResult(result)
-

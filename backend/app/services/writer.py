@@ -81,8 +81,10 @@ SECTION_SPECS = [
             "- **Ownership structure (if visible):** Notable shareholders (founders, universities, corporate parents), "
             "and whether the company appears founder-controlled.\n"
             "- **Notes & ambiguities:** Briefly flag any conflicting dates, names, or jurisdictions reported across sources.\n\n"
-            "If incorporation / founding dates are only visible via Apollo.io firmographic data, you may say "
-            "'Founded in <year> (per Apollo firmographic data)' with an appropriate Apollo citation. [S<ID>]\n"
+            "Prefer GLEIF if an LEI record exists (legal name, jurisdiction, registered address, registration authority IDs). "
+            "If no LEI, use OpenAI web‑derived evidence (legal pages, SEC/EDGAR, university/government portals) "
+            "and supplement only with PDL company for Founded year and HQ when the web is inconclusive. "
+            "Clearly attribute PDL as 'vendor aggregate' when used.\n"
             "Do not guess missing identifiers. If filings mention conflicting dates or numbers, note this explicitly "
             "with citations to the conflicting sources."
         ),
@@ -126,7 +128,11 @@ SECTION_SPECS = [
             "- **Funding stance:** Whether the company is bootstrapped, lightly funded, heavily VC-backed, or primarily "
             "grant/contract-funded.\n"
             "- **Implications:** One or two concise bullets on what this funding profile implies for risk, runway, and "
-            "bargaining position (grounded strictly in evidence, no speculation beyond what follows logically).\n\n"
+            "bargaining position (grounded strictly in evidence, no speculation beyond what follows logically).\n"
+            "- **Vendor aggregate (PDL):** You may use PDL's company roll‑up fields (total_funding_raised, number_funding_rounds, "
+            "latest_funding_stage, last_funding_date) to summarise totals and to backfill where primary evidence is sparse. "
+            "Clearly attribute these as 'PDL aggregated' and attach a PDL citation. Prefer Exa‑sourced press/filings for "
+            "per‑round details and investor names.\n\n"
             "If data is sparse or inconsistent, say so explicitly and avoid inventing round labels or amounts."
         ),
     ),
@@ -246,15 +252,14 @@ SECTION_SOURCE_POLICY: dict[str, dict[str, Any]] = {
         # default: all sources (no filter)
     },
     "founding_details": {
-        "allowed_providers": {"exa", "companies_house", "open_corporates", "gleif"},
-
+        "allowed_providers": {"gleif", "openai-web", "exa", "pdl_company"},
+        # do NOT restrict exa to company domain; founding facts may live on EDGAR/university/legal pages
     },
     "founders_and_leadership": {
-        "allowed_providers": {"apollo", "pdl"},
+        "allowed_providers": {"pdl"},
     },
     "fundraising": {
-        # Explicitly allow core funding providers including PitchBook.
-        "allowed_providers": {"exa", "companies_house", "apollo", "pitchbook"},
+        "allowed_providers": {"exa", "pdl_company"},
     },
     "product": {
         "allowed_providers": {"exa"},
@@ -368,21 +373,13 @@ class Writer:
         provider = (s.provider or "").lower()
         # Match lowercase connector keys
         # Priority order: registries > people enrichment > openai-web (competitors) > exa
-        if provider == "companies_house":
-            priority = 100
-        elif provider == "gleif":
+        if provider == "gleif":
             priority = 98
-        elif provider in {"open_corporates", "opencorporates"}:
-            priority = 97
-        elif provider == "open_corporates":
-            priority = 95
-        elif provider == "apollo":
-            priority = 90
-        elif provider == "pitchbook":          # NEW – high priority for fundraising
-            priority = 88
+        elif provider == "pdl_company":
+            priority = 87   # between Apollo(90) and PDL-person(85) historically
         elif provider == "pdl":
             priority = 85
-        elif provider == "openai-web" or provider == "openai_web":
+        elif provider in {"openai-web", "openai_web"}:
             # Raised priority so competitor sources survive token pressure
             priority = 80
         elif provider == "exa":
@@ -446,7 +443,7 @@ class Writer:
             # No policy → all sources available
             return all_sources
 
-        registry_providers = {"companies_house", "open_corporates", "gleif"}
+        registry_providers = {"gleif"}  # previously included CH / OpenCorporates; now only GLEIF
         is_founding_details = section_name == "founding_details"
 
         allowed_providers: set[str] = {
@@ -460,14 +457,6 @@ class Writer:
         filtered: list[Source] = []
         for src in all_sources:
             provider_norm = self._normalise_provider(src.provider)
-
-            # Global rule: OpenCorporates is only used for founding_details
-            if provider_norm == "open_corporates" and section_name != "founding_details":
-                continue
-
-            # Global rule: PitchBook is only used for the Fundraising section
-            if provider_norm == "pitchbook" and section_name != "fundraising":
-                continue
 
             # Check provider whitelist if specified
             if allowed_providers and provider_norm not in allowed_providers:
@@ -1274,6 +1263,48 @@ Output 3–6 short bullet points or a compact paragraph (max ~140 words).
 
         return snippets
 
+    def _build_pdl_company_snippets(self, kg: KnowledgeGraph) -> list[dict[str, Any]]:
+        """
+        Flatten PDL company profile/aggregates into synthetic sources for the Writer.
+        """
+        out = []
+        roll = (kg.company.profile or {}).get("pdl_funding_rollup") or {}
+        comp = (kg.company.profile or {}).get("pdl_company") or {}
+
+        if roll:
+            out.append({
+                "provider": "pdl_company",
+                "title": f"PDL company funding roll-up for {kg.company.name}",
+                "snippet": (
+                    "PDL aggregated: "
+                    f"total_funding_raised={roll.get('total_funding_raised')}, "
+                    f"rounds={roll.get('number_funding_rounds')}, "
+                    f"latest={roll.get('latest_funding_stage')} ({roll.get('last_funding_date')})."
+                ),
+                "url": None,
+            })
+
+        if comp:
+            founded = comp.get("founded")
+            hq = comp.get("location_name") or comp.get("location") or comp.get("hq")
+            website = comp.get("website")
+            parts = []
+            if founded:
+                parts.append(f"Founded: {founded}")
+            if hq:
+                parts.append(f"HQ: {hq}")
+            if website:
+                parts.append(f"Website: {website}")
+            
+            if parts:
+                out.append({
+                    "provider": "pdl_company",
+                    "title": f"PDL company profile for {kg.company.name}",
+                    "snippet": " (vendor aggregate) ".join([""] + parts).strip(),
+                    "url": None,
+                })
+        return out
+
     # -------------------------------------------------------------------------
     # Public entrypoint
     # -------------------------------------------------------------------------
@@ -1339,6 +1370,9 @@ Output 3–6 short bullet points or a compact paragraph (max ~140 words).
 
         # Apollo structured snippets: firmographics + leadership snapshot
         all_snippets.extend(self._build_apollo_structured_snippets(kg))
+
+        # PDL Company structured snippets (roll-ups)
+        all_snippets.extend(self._build_pdl_company_snippets(kg))
 
         # Optional: create a synthetic PitchBook funding summary source
         if kg.company.funding_rounds:
