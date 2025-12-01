@@ -95,6 +95,23 @@ class GLEIFConnector(BaseConnector):
         if country_code:
             params["filter[entity.legalAddress.country]"] = country_code
 
+        domain_hint = (kwargs.get("company_domain") or "").strip().lower()
+
+        def _domain_tokens(domain: str) -> List[str]:
+            if not domain:
+                return []
+            stripped = domain
+            if "://" in stripped:
+                stripped = stripped.split("://", 1)[1]
+            stripped = stripped.split("/", 1)[0]
+            stripped = stripped.replace("www.", "")
+            tokens = [tok for tok in stripped.split(".") if tok]
+            # drop common tlds
+            blacklist = {"com", "net", "org", "io", "co", "ai"}
+            return [tok for tok in tokens if tok not in blacklist]
+
+        domain_tokens = _domain_tokens(domain_hint)
+
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             try:
                 resp = await client.get(
@@ -126,104 +143,143 @@ class GLEIFConnector(BaseConnector):
             if not records:
                 return ConnectorResult({})
 
-            # Heuristic for best match:
-            # 1. Prefer ISSUED status
-            # 2. Prefer exact name match (case-insensitive)
-            # 3. Fallback: first record
-            best_record = records[0]
-            
             normalized_q = company_name.lower() if company_name else ""
-            
-            if normalized_q:
-                for rec in records:
-                    attrs = rec.get("attributes") or {}
-                    reg = attrs.get("registration") or {}
-                    entity = attrs.get("entity") or {}
-                    legal_name = entity.get("legalName", {}).get("name", "").lower()
-                    
-                    if reg.get("status") == "ISSUED" and legal_name == normalized_q:
-                        best_record = rec
-                        break
 
-            # Normalize the best record
-            attrs = best_record.get("attributes") or {}
-            entity = attrs.get("entity") or {}
-            legal_address = entity.get("legalAddress") or {}
-            hq_address = entity.get("headquartersAddress") or {}
-            reg = attrs.get("registration") or {}
-            ra = entity.get("registrationAuthority") or {}
+            def _score_candidate(
+                legal_name: str,
+                registration: Dict[str, Any],
+                jurisdiction: Optional[str],
+                legal_address: Dict[str, Any],
+            ) -> float:
+                score = 0.0
+                status = (registration or {}).get("status")
+                if status == "ISSUED":
+                    score += 2.0
 
-            gleif_company: Dict[str, Any] = {
-                "lei": attrs.get("lei"),
-                "legal_name": entity.get("legalName", {}).get("name"),
-                "legal_jurisdiction": entity.get("legalJurisdiction"),
-                "entity_category": entity.get("category"),
-                "entity_status": entity.get("status"),
-                "legal_address": {
-                    "city": legal_address.get("city"),
-                    "region": legal_address.get("region"),
-                    "country": legal_address.get("country"),
-                    "postal_code": legal_address.get("postalCode"),
-                    "lines": legal_address.get("addressLines") or [],
-                },
-                "headquarters_address": {
-                    "city": hq_address.get("city"),
-                    "region": hq_address.get("region"),
-                    "country": hq_address.get("country"),
-                    "postal_code": hq_address.get("postalCode"),
-                    "lines": hq_address.get("addressLines") or [],
-                },
-                "registration_authority_id": ra.get("registrationAuthorityID"),
-                "registration_authority_entity_id": ra.get("registrationAuthorityEntityID"),
-                "registration": {
-                    "status": reg.get("status"),
-                    "initial_registration_date": reg.get("initialRegistrationDate"),
-                    "last_update_date": reg.get("lastUpdateDate"),
-                    "next_renewal_date": reg.get("nextRenewalDate"),
-                    "managing_lou": reg.get("managingLOU"),
-                },
-            }
+                if normalized_q and legal_name == normalized_q:
+                    score += 3.0
+                elif normalized_q and normalized_q in legal_name:
+                    score += 1.5
 
-            # Construct a concise snippet for the Writer
-            snippet_lines = []
-            if gleif_company["legal_name"]:
-                snippet_lines.append(f"Legal name: {gleif_company['legal_name']}")
-            if gleif_company["lei"]:
-                snippet_lines.append(f"LEI: {gleif_company['lei']}")
-            if gleif_company["legal_jurisdiction"]:
-                snippet_lines.append(f"Legal jurisdiction: {gleif_company['legal_jurisdiction']}")
-            
-            ra_id = gleif_company.get("registration_authority_id")
-            ra_entity_id = gleif_company.get("registration_authority_entity_id")
-            if ra_id or ra_entity_id:
-                snippet_lines.append(
-                    f"Registration authority: {ra_id or 'N/A'} "
-                    f"(local ID: {ra_entity_id or 'N/A'})"
+                if country_code and jurisdiction and jurisdiction.upper().startswith(country_code.upper()):
+                    score += 1.5
+
+                addr_country = (legal_address or {}).get("country")
+                if country_code and addr_country and addr_country.upper().startswith(country_code.upper()):
+                    score += 1.0
+
+                if domain_tokens:
+                    for tok in domain_tokens:
+                        if tok and tok in legal_name:
+                            score += 1.0
+                            break
+
+                return score
+
+            candidates: List[Dict[str, Any]] = []
+            snippets: List[Dict[str, Any]] = []
+            best_candidate: Optional[Dict[str, Any]] = None
+            best_score = float("-inf")
+
+            for rec in records:
+                attrs = rec.get("attributes") or {}
+                entity = attrs.get("entity") or {}
+                legal_address = entity.get("legalAddress") or {}
+                hq_address = entity.get("headquartersAddress") or {}
+                reg = attrs.get("registration") or {}
+                ra = entity.get("registrationAuthority") or {}
+
+                legal_name_val = entity.get("legalName", {}).get("name") or ""
+                legal_name_lower = legal_name_val.lower()
+                jurisdiction = entity.get("legalJurisdiction")
+
+                candidate: Dict[str, Any] = {
+                    "lei": attrs.get("lei"),
+                    "legal_name": legal_name_val,
+                    "legal_jurisdiction": jurisdiction,
+                    "entity_category": entity.get("category"),
+                    "entity_status": entity.get("status"),
+                    "legal_address": {
+                        "city": legal_address.get("city"),
+                        "region": legal_address.get("region"),
+                        "country": legal_address.get("country"),
+                        "postal_code": legal_address.get("postalCode"),
+                        "lines": legal_address.get("addressLines") or [],
+                    },
+                    "headquarters_address": {
+                        "city": hq_address.get("city"),
+                        "region": hq_address.get("region"),
+                        "country": hq_address.get("country"),
+                        "postal_code": hq_address.get("postalCode"),
+                        "lines": hq_address.get("addressLines") or [],
+                    },
+                    "registration_authority_id": ra.get("registrationAuthorityID"),
+                    "registration_authority_entity_id": ra.get("registrationAuthorityEntityID"),
+                    "registration": {
+                        "status": reg.get("status"),
+                        "initial_registration_date": reg.get("initialRegistrationDate"),
+                        "last_update_date": reg.get("lastUpdateDate"),
+                        "next_renewal_date": reg.get("nextRenewalDate"),
+                        "managing_lou": reg.get("managingLOU"),
+                    },
+                }
+
+                score = _score_candidate(legal_name_lower, reg, jurisdiction, candidate["legal_address"])
+                candidate["base_score"] = score
+                candidates.append(candidate)
+
+                snippet_lines = []
+                if candidate["legal_name"]:
+                    snippet_lines.append(f"Legal name: {candidate['legal_name']}")
+                if candidate["lei"]:
+                    snippet_lines.append(f"LEI: {candidate['lei']}")
+                if candidate["legal_jurisdiction"]:
+                    snippet_lines.append(f"Legal jurisdiction: {candidate['legal_jurisdiction']}")
+
+                ra_id = candidate.get("registration_authority_id")
+                ra_entity_id = candidate.get("registration_authority_entity_id")
+                if ra_id or ra_entity_id:
+                    snippet_lines.append(
+                        f"Registration authority: {ra_id or 'N/A'} "
+                        f"(local ID: {ra_entity_id or 'N/A'})"
+                    )
+
+                city = candidate["legal_address"].get("city")
+                region = candidate["legal_address"].get("region")
+                country = candidate["legal_address"].get("country")
+                postal_code = candidate["legal_address"].get("postal_code")
+
+                if any([city, region, country, postal_code]):
+                    addr_str = f"{city or ''}, {region or ''}, {country or ''} {postal_code or ''}".strip().replace(" ,", ",")
+                    snippet_lines.append(f"Registered address: {addr_str}")
+
+                reg_info = candidate.get("registration") or {}
+                if reg_info.get("status"):
+                    snippet_lines.append(f"LEI registration status: {reg_info['status']}")
+                if reg_info.get("initial_registration_date"):
+                    snippet_lines.append(
+                        f"LEI first issued: {reg_info['initial_registration_date']}"
+                    )
+
+                snippets.append(
+                    {
+                        "provider": "gleif",
+                        "title": f"GLEIF LEI record for {candidate.get('legal_name') or 'entity'}",
+                        "snippet": "\n".join(snippet_lines),
+                        "url": f"https://search.gleif.org/#/record/{candidate['lei']}" if candidate.get("lei") else None,
+                    }
                 )
 
-            city = gleif_company["legal_address"].get("city")
-            region = gleif_company["legal_address"].get("region")
-            country = gleif_company["legal_address"].get("country")
-            postal_code = gleif_company["legal_address"].get("postal_code")
-            
-            if any([city, region, country, postal_code]):
-                addr_str = f"{city or ''}, {region or ''}, {country or ''} {postal_code or ''}".strip().replace(" ,", ",")
-                snippet_lines.append(f"Registered address: {addr_str}")
+                if score > best_score:
+                    best_score = score
+                    best_candidate = candidate
 
-            if reg.get("status"):
-                snippet_lines.append(f"LEI registration status: {reg['status']}")
-            if reg.get("initial_registration_date"):
-                snippet_lines.append(f"LEI first issued: {reg['initial_registration_date']}")
-
-            snippets = [{
-                "provider": "gleif",
-                "title": f"GLEIF LEI record for {gleif_company.get('legal_name') or 'entity'}",
-                "snippet": "\n".join(snippet_lines),
-                "url": f"https://search.gleif.org/#/record/{gleif_company['lei']}" if gleif_company.get("lei") else None,
-            }]
+            if not candidates or not best_candidate:
+                return ConnectorResult({})
 
             result_data = {
-                "company": gleif_company,
+                "company": best_candidate,
+                "candidates": candidates,
                 "snippets": snippets,
             }
 

@@ -50,7 +50,8 @@ class OpenAIWebSearchConnector(BaseConnector):
           ],
           # Optional structured extras used by downstream components:
           "competitors": [ ... ],
-          "founding_facts": { ... }
+          "founding_facts": { ... },
+          "people_web": [ ... ]  # New in leadership mode
         }
     """
 
@@ -187,6 +188,45 @@ class OpenAIWebSearchConnector(BaseConnector):
             f"TARGET COMPANY INFORMATION:\\n{target_block}\n"
         )
 
+    def _build_leadership_prompt(
+        self,
+        company_name: str,
+        website: str,
+        context: str,
+    ) -> str:
+        """
+        Prompt for identifying founders and key executives (fallback to PDL).
+        """
+        target_desc_lines = []
+        if company_name:
+            target_desc_lines.append(f"- Name: {company_name}")
+        if website:
+            target_desc_lines.append(f"- Website: {website}")
+        if context:
+            target_desc_lines.append(f"- Additional context: {context}")
+        target_block = "\\n".join(target_desc_lines) if target_desc_lines else "N/A"
+
+        return (
+            "You are a corporate research assistant focusing on founders and leadership.\n\n"
+            "Use the web_search tool to identify the company's founders, CEO, CTO, and other key leaders.\n"
+            "Return a JSON object:\n"
+            "{\n"
+            '  "people": [\n'
+            "    {\n"
+            '      "name": "Full name",\n'
+            '      "role": "Primary role/title",\n'
+            '      "summary": "2-4 sentence biography focusing on current role, prior employers, and domain expertise.",\n'
+            '      "evidence": [\n'
+            '         {"url": "https://...", "title": "...", "snippet": "short supporting quote or description"}\n'
+            "      ]\n"
+            "    }\n"
+            "  ]\n"
+            "}\n\n"
+            "Do not include the target company itself as a person. Only include individuals.\n"
+            "The response must be valid JSON with no extra commentary.\n\n"
+            f"TARGET COMPANY INFORMATION:\\n{target_block}\n"
+        )
+
     def _parse_competitor_json(self, raw: str) -> List[Dict[str, Any]]:
         """
         Robustly extract the 'competitors' list from a JSON-ish string.
@@ -282,6 +322,68 @@ class OpenAIWebSearchConnector(BaseConnector):
 
         return {"founding_facts": founding_facts, "evidence": evidence}
 
+    def _parse_leadership_json(self, raw: str) -> Dict[str, Any]:
+        """
+        Robustly extract 'people' and 'evidence' from leadership search JSON.
+        """
+        if not raw:
+            return {"people": [], "evidence_snippets": []}
+
+        data: Dict[str, Any] = {}
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            start = raw.find("{")
+            end = raw.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                try:
+                    data = json.loads(raw[start : end + 1])
+                except json.JSONDecodeError:
+                    logger.warning("OpenAIWebSearchConnector: failed to parse leadership JSON.")
+                    return {"people": [], "evidence_snippets": []}
+            else:
+                return {"people": [], "evidence_snippets": []}
+
+        people = data.get("people")
+        if not isinstance(people, list):
+            people = []
+
+        evidence_snippets: List[Dict[str, Any]] = []
+        for p in people:
+            if not isinstance(p, dict):
+                continue
+            
+            ev_list = p.get("evidence")
+            if not isinstance(ev_list, list):
+                continue
+
+            for ev in ev_list:
+                if not isinstance(ev, dict):
+                    continue
+
+                url = ev.get("url")
+                title = ev.get("title") or f"Leadership evidence for {p.get('name')}"
+                snippet = ev.get("snippet") or ""
+
+                domain = None
+                if url:
+                    try:
+                        parsed = urlparse(url if "://" in url else "https://" + url)
+                        domain = parsed.netloc or None
+                    except Exception:
+                        domain = None
+
+                evidence_snippets.append({
+                    "url": url,
+                    "title": title,
+                    "snippet": snippet,
+                    "domain": domain,
+                    "provider": "openai-web",
+                    "published_date": None,
+                })
+
+        return {"people": people, "evidence_snippets": evidence_snippets}
+
     def _competitors_to_snippets(self, competitors: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Turn structured competitors into snippet objects for downstream use.
@@ -369,6 +471,7 @@ class OpenAIWebSearchConnector(BaseConnector):
         Supported modes (params["mode"]):
         - "competitors": high-level competitor discovery for the target company.
         - "founding": deep search for legal/corporate identity facts.
+        - "leadership": discovery of founders and key executives (fallback for PDL).
 
         Additional params:
         - company_name: str
@@ -376,7 +479,12 @@ class OpenAIWebSearchConnector(BaseConnector):
         - context: str (optional free-form description from the user)
 
         Returns:
-            ConnectorResult({"snippets": [...], "competitors": [...], "founding_facts": {...}})
+            ConnectorResult({
+                "snippets": [...],
+                "competitors": [...],       # in competitors mode
+                "founding_facts": {...},    # in founding mode
+                "people_web": [...]         # in leadership mode
+            })
         """
         if not self._has_credentials():
             logger.info(
@@ -405,6 +513,8 @@ class OpenAIWebSearchConnector(BaseConnector):
             prompt = self._build_competitor_prompt(company_name, website, context)
         elif mode == "founding":
             prompt = self._build_founding_prompt(company_name, website, context)
+        elif mode == "leadership":
+            prompt = self._build_leadership_prompt(company_name, website, context)
         else:
             logger.warning(
                 "OpenAIWebSearchConnector called with unsupported mode '%s'; returning empty result.",
@@ -458,6 +568,12 @@ class OpenAIWebSearchConnector(BaseConnector):
                 return {
                     "snippets": snippets,
                     "founding_facts": parsed.get("founding_facts", {}),
+                }
+            elif mode == "leadership":
+                parsed = self._parse_leadership_json(raw_text or "")
+                return {
+                    "snippets": parsed.get("evidence_snippets", []),
+                    "people_web": parsed.get("people", []),
                 }
             return {}
 

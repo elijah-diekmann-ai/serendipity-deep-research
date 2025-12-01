@@ -91,6 +91,104 @@ def _simple_similarity(name: str, domain: str) -> float:
         
     return 0.0
 
+
+def _normalize_country(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    return re.sub(r"[^a-z0-9]", "", value.lower().strip()) or None
+
+
+def _guess_country_from_location_name(location_name: Optional[str]) -> Optional[str]:
+    if not location_name:
+        return None
+    parts = [p.strip() for p in location_name.split(",") if p.strip()]
+    if not parts:
+        return None
+    return _normalize_country(parts[-1])
+
+
+def _rank_gleif_candidates(
+    candidates: List[dict],
+    primary_name: Optional[str],
+    pdl_company: dict,
+    target_country_code: Optional[str],
+    domain_tokens: List[str],
+) -> tuple[Optional[dict], List[dict]]:
+    """
+    Score GLEIF candidates using additional context (PDL, domain, country hints).
+    Returns (best_candidate, ranked_candidates).
+    """
+    normalized_names: List[str] = []
+    for name in [primary_name, pdl_company.get("name")]:
+        if not name:
+            continue
+        norm = _normalize_name(name)
+        if norm and norm not in normalized_names:
+            normalized_names.append(norm)
+
+    country_hints = set()
+    if target_country_code:
+        norm_country = _normalize_country(target_country_code)
+        if norm_country:
+            country_hints.add(norm_country)
+    pdl_country = _guess_country_from_location_name(pdl_company.get("location_name"))
+    if pdl_country:
+        country_hints.add(pdl_country)
+
+    domain_tokens_lower = [tok.lower() for tok in domain_tokens if tok]
+
+    best_candidate: Optional[dict] = None
+    best_score = float("-inf")
+    prepared: List[dict] = []
+
+    for cand in candidates:
+        cand_copy = dict(cand)
+        score = float(cand_copy.get("base_score") or 0.0)
+        legal_name = (cand_copy.get("legal_name") or "").lower()
+        normalized_legal_name = _normalize_name(cand_copy.get("legal_name") or "")
+
+        # Name alignment weighting
+        for idx, hint_name in enumerate(normalized_names):
+            weight = max(0.5, 3.0 - idx)
+            if hint_name and normalized_legal_name == hint_name:
+                score += weight
+            elif hint_name and hint_name in normalized_legal_name:
+                score += weight * 0.4
+
+        # Country / jurisdiction alignment
+        cand_countries = set()
+        for field in ("legal_address", "headquarters_address"):
+            addr = cand_copy.get(field) or {}
+            cand_country = _normalize_country(addr.get("country"))
+            if cand_country:
+                cand_countries.add(cand_country)
+        juris = _normalize_country(cand_copy.get("legal_jurisdiction"))
+        if juris:
+            cand_countries.add(juris)
+
+        if country_hints and cand_countries and (cand_countries & country_hints):
+            score += 1.2
+
+        # Domain token alignment (brand vs. legal name)
+        for tok in domain_tokens_lower:
+            if tok and tok in legal_name:
+                score += 0.8
+                break
+
+        cand_copy["match_score"] = round(score, 3)
+        cand_copy["is_primary"] = False
+        prepared.append(cand_copy)
+
+        if score > best_score:
+            best_score = score
+            best_candidate = cand_copy
+
+    prepared.sort(key=lambda c: c.get("match_score", 0.0), reverse=True)
+    if best_candidate:
+        best_candidate["is_primary"] = True
+
+    return best_candidate, prepared
+
 @dataclass
 class DomainCandidate:
     count: int = 0
@@ -150,7 +248,8 @@ class CompanyNode:
     web_snippets: List[Dict[str, Any]] = field(default_factory=list)
     # Structured competitor objects produced by reasoning-first connectors
     competitors: List[Dict[str, Any]] = field(default_factory=list)
-    # NEW – normalized funding rounds, primarily from PitchBook
+    # NEW – normalized funding rounds, primarily from PDL Company today,
+    # but schema is compatible with PitchBook or other sources.
     funding_rounds: List[Dict[str, Any]] = field(default_factory=list)
 
 
@@ -605,20 +704,25 @@ def resolve_entities(raw_results: dict, target_input: Optional[dict] = None) -> 
     oc_company = oc_data.get("company") or {}
     gleif_data = raw_results.get("gleif_lookup", {}) or {}
     gleif_company = gleif_data.get("company") or {}
+    gleif_candidates_raw = gleif_data.get("candidates") or []
     pdl_company_data = raw_results.get("pdl_company_enrich", {}) or {}
     pdl_company = pdl_company_data.get("company") or {}
     openai_founding = raw_results.get("openai_founding", {}) or {}
+    
+    # Extract OpenAI leadership people
+    openai_leadership = raw_results.get("openai_leadership", {}) or {}
+    people_web = openai_leadership.get("people_web") or []
 
     ch_company = ch_data.get("company", {}) or {}
     apollo_org = apollo_data.get("organization") or {}
 
     company_name = (
-        ch_company.get("company_name")
+        (target_input or {}).get("company_name")
+        or pdl_company.get("name")
+        or apollo_org.get("name")
+        or ch_company.get("company_name")
         or oc_company.get("name")
         or gleif_company.get("legal_name")
-        or apollo_org.get("name")
-        or pdl_company.get("name")
-        or (target_input or {}).get("company_name")
         or "Unknown"
     )
 
@@ -628,6 +732,26 @@ def resolve_entities(raw_results: dict, target_input: Optional[dict] = None) -> 
         pdl_company,
         domain_snippet_candidates or web_snippets,
     )
+
+    gleif_ranked_candidates: List[dict] = []
+    # Re-rank GLEIF candidates using richer context if available.
+    if gleif_company or gleif_candidates_raw:
+        candidate_pool = gleif_candidates_raw[:]
+        if not candidate_pool and gleif_company:
+            candidate_pool = [gleif_company]
+
+        domain_tokens = _domain_core_tokens(domain or "") if domain else []
+        best, ranked = _rank_gleif_candidates(
+            candidate_pool,
+            company_name or gleif_company.get("legal_name"),
+            pdl_company,
+            (target_input or {}).get("country_code"),
+            domain_tokens,
+        )
+
+        if best:
+            gleif_company = best
+        gleif_ranked_candidates = ranked
 
     if oc_company:
         # Compact, human-readable snippet summarising key corporate facts.
@@ -795,6 +919,9 @@ def resolve_entities(raw_results: dict, target_input: Optional[dict] = None) -> 
         if not profile.get("registered_office") and gleif_profile.get("legal_address"):
             profile["registered_office"] = gleif_profile["legal_address"]
 
+    if gleif_ranked_candidates:
+        profile["gleif_candidates"] = gleif_ranked_candidates
+
     # Apollo firmographics snapshot (kept small + normalised)
     if apollo_org:
         firmographics = {
@@ -860,6 +987,22 @@ def resolve_entities(raw_results: dict, target_input: Optional[dict] = None) -> 
     )
 
     people_nodes = _build_people_nodes(ch_data, apollo_data, pdl_data)
+
+    # OpenAI web-derived leadership
+    for p in people_web:
+        full_name = p.get("name") or "Unknown"
+        role = p.get("role")
+        node = PersonNode(
+            full_name=full_name,
+            roles=[role] if role else [],
+            linkedin_url=None,
+            photo_url=None,
+            identity_source="web",
+            enrichment={"openai-web": p},
+        )
+        # We append these directly; _enrich_with_pdl below will attempt to enrich them
+        # if they look like valid targets (though they lack LinkedIn URLs).
+        people_nodes.append(node)
 
     # Optionally enrich via People Data Labs (biography layer)
     # Only enriches Apollo-discovered people who don't already have PDL data

@@ -18,7 +18,7 @@ settings = get_settings()
 ALLOWED_CONNECTORS = {"exa", "gleif", "openai_web", "pdl", "pdl_company"}
 # retain others in codebase but we will not schedule them here
 
-MAX_PLANNER_STEPS = 10
+MAX_PLANNER_STEPS = 16
 # Global cap on total Exa query strings across all Exa steps
 MAX_EXA_QUERIES = 8
 
@@ -370,6 +370,29 @@ def _default_plan(target_input: dict) -> List[PlanStep]:
                 },
             }
         )
+
+    # --- Step 5.5: Similarity-based competitor discovery (Exa /findSimilar) ---
+    if domain:
+        steps.append(
+            {
+                "name": "exa_competitors",
+                "connector": "exa",
+                "params": {
+                    "mode": "similar",
+                    "url": f"https://{domain}",
+                    "num_results": 10,
+                    "exclude_domains": [
+                        "crunchbase.com",
+                        "pitchbook.com",
+                        "golden.com",
+                        "linkedin.com",
+                        "tracxn.com",
+                        "g2.com",
+                        "capterra.com",
+                    ],
+                },
+            }
+        )
     
     # --- Step 6: Founding facts fallback (Agentic OpenAI) ---
     steps.append({
@@ -382,6 +405,19 @@ def _default_plan(target_input: dict) -> List[PlanStep]:
             "context": context,
         },
     })
+
+    # --- Step 7: Leadership discovery fallback (Agentic OpenAI) ---
+    if company_name or website:
+        steps.append({
+            "name": "openai_leadership",
+            "connector": "openai_web",
+            "params": {
+                "mode": "leadership",
+                "company_name": company_name,
+                "website": website,
+                "context": context,
+            },
+        })
 
     # -------------------------------------------------------------------------
     # Supplemental Connectors
@@ -402,6 +438,8 @@ def _default_plan(target_input: dict) -> List[PlanStep]:
             gleif_params["lei"] = target_input["lei"]
         if "bic" in target_input:
             gleif_params["bic"] = target_input["bic"]
+        if domain:
+            gleif_params["company_domain"] = domain
 
         steps.append(
             {

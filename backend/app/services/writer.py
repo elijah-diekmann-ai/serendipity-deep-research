@@ -80,11 +80,15 @@ SECTION_SPECS = [
             "or greenfield founding; connect to any predecessor entities if the sources support it.\n"
             "- **Ownership structure (if visible):** Notable shareholders (founders, universities, corporate parents), "
             "and whether the company appears founder-controlled.\n"
+            "- **Group structure:** Briefly distinguish the primary parent entity and any major LEI‑registered subsidiaries "
+            "or regional entities, stating their jurisdictions and LEIs when visible.\n"
             "- **Notes & ambiguities:** Briefly flag any conflicting dates, names, or jurisdictions reported across sources.\n\n"
             "Prefer GLEIF if an LEI record exists (legal name, jurisdiction, registered address, registration authority IDs). "
             "If no LEI, use OpenAI web‑derived evidence (legal pages, SEC/EDGAR, university/government portals) "
             "and supplement only with PDL company for Founded year and HQ when the web is inconclusive. "
             "Clearly attribute PDL as 'vendor aggregate' when used.\n"
+            "When GLEIF data refers to a specific legal entity that is not clearly the global parent, treat it as one "
+            "entity within a group, not as the whole group itself.\n"
             "Do not guess missing identifiers. If filings mention conflicting dates or numbers, note this explicitly "
             "with citations to the conflicting sources."
         ),
@@ -105,6 +109,8 @@ SECTION_SPECS = [
             "- Founders and C-level executives (names, titles, notable prior roles/employers, repeat-founder status).\n"
             "- Any board members or key advisors that appear in Apollo, PDL, or public filings.\n"
             "- Evidence of technical vs. commercial leadership balance, and any obvious gaps.\n\n"
+            "Always prioritise founders and the CEO/CTO if they appear in any source (PDL, OpenAI web, Exa). "
+            "OpenAI web (openai-web) and Exa sources may name founders even when PDL does not. "
             "If public web/filing sources do not name founders explicitly but Apollo.io lists leaders, state this clearly and "
             "attribute those identities to Apollo with citations. If no team data exists at all, say so explicitly rather than "
             "guessing."
@@ -132,7 +138,9 @@ SECTION_SPECS = [
             "- **Vendor aggregate (PDL):** You may use PDL's company roll‑up fields (total_funding_raised, number_funding_rounds, "
             "latest_funding_stage, last_funding_date) to summarise totals and to backfill where primary evidence is sparse. "
             "Clearly attribute these as 'PDL aggregated' and attach a PDL citation. Prefer Exa‑sourced press/filings for "
-            "per‑round details and investor names.\n\n"
+            "per‑round details and investor names. Treat PDL `total_funding_raised` and `funding_details` as approximate "
+            "roll-ups; when press releases or filings contradict PDL, prefer the primary sources and explicitly flag "
+            "the discrepancy.\n\n"
             "If data is sparse or inconsistent, say so explicitly and avoid inventing round labels or amounts."
         ),
     ),
@@ -256,7 +264,7 @@ SECTION_SOURCE_POLICY: dict[str, dict[str, Any]] = {
         # do NOT restrict exa to company domain; founding facts may live on EDGAR/university/legal pages
     },
     "founders_and_leadership": {
-        "allowed_providers": {"pdl"},
+        "allowed_providers": {"pdl", "openai-web", "exa"},
     },
     "fundraising": {
         "allowed_providers": {"exa", "pdl_company"},
@@ -268,7 +276,7 @@ SECTION_SOURCE_POLICY: dict[str, dict[str, Any]] = {
         "allowed_providers": {"exa"},
     },
     "competitors": {
-        "allowed_providers": {"openai-web"},
+        "allowed_providers": {"openai-web", "exa"},
     },
     "recent_news": {
         "allowed_providers": {"exa"},
@@ -410,6 +418,10 @@ class Writer:
             return "pitchbook"
         if p in {"gleif", "global legal entity identifier foundation"}:
             return "gleif"
+        if p in {"openai-web", "openai_web"}:
+            return "openai-web"
+        if p in {"pdl company", "pdl_company"}:
+            return "pdl_company"
         return p
 
     def _source_domain(self, src: Source) -> str | None:
@@ -477,17 +489,22 @@ class Writer:
 
         if is_founding_details and filtered:
             # Check if we have any registry-quality sources
-            has_registry_sources = any(
-                self._normalise_provider(s.provider) in registry_providers
+            registry_sources = [
+                s
                 for s in filtered
-            )
-            if has_registry_sources:
-                # Keep only registry providers; drop Exa (and any other non-registry providers)
-                filtered = [
+                if self._normalise_provider(s.provider) in registry_providers
+            ]
+            
+            if registry_sources:
+                # Previously we dropped non-registry sources if registry ones existed.
+                # Now we keep them, just ensuring registry ones are prioritized in the list
+                # (though _source_sort_key handles strict ranking later).
+                non_registry_sources = [
                     s
                     for s in filtered
-                    if self._normalise_provider(s.provider) in registry_providers
+                    if self._normalise_provider(s.provider) not in registry_providers
                 ]
+                filtered = registry_sources + non_registry_sources
 
         return filtered
 
@@ -495,7 +512,8 @@ class Writer:
         """
         Filter sources to only include those with published_date within RECENT_NEWS_MAX_AGE_DAYS.
 
-        - Sources without a valid published_date are excluded from "recent" news.
+        - Sources without a valid published_date are excluded from "recent" news,
+          unless they are high-signal (top ranked), in which case we include a few.
         - If filtering removes all sources, falls back to unfiltered to avoid empty sections.
         """
         if not sources:
@@ -503,21 +521,32 @@ class Writer:
 
         cutoff = datetime.utcnow().date() - timedelta(days=RECENT_NEWS_MAX_AGE_DAYS)
         recent: list[Source] = []
+        undated: list[Source] = []
 
         for s in sources:
             raw = (s.published_date or "").strip() if hasattr(s, "published_date") else ""
             if not raw:
-                continue  # no date → don't include in 'recent'
+                undated.append(s)
+                continue
 
             # Exa typically returns ISO timestamps; be defensive and just use YYYY-MM-DD
             date_str = raw[:10]
             try:
                 d = datetime.strptime(date_str, "%Y-%m-%d").date()
             except Exception:
+                undated.append(s)
                 continue
 
             if d >= cutoff:
                 recent.append(s)
+
+        if recent:
+            # Add a few high-signal undated sources (e.g. official press pages without metadata)
+            # to avoid missing key context just because the date parser failed.
+            undated_sorted = sorted(undated, key=self._source_sort_key)
+            # Append top 3 undated sources to the recent list
+            recent.extend(undated_sorted[:3])
+            return recent
 
         # If filtering kills everything, fall back to unfiltered sources to avoid empty sections
         return recent or sources
@@ -1374,19 +1403,79 @@ Output 3–6 short bullet points or a compact paragraph (max ~140 words).
         # PDL Company structured snippets (roll-ups)
         all_snippets.extend(self._build_pdl_company_snippets(kg))
 
-        # Optional: create a synthetic PitchBook funding summary source
+        # OpenAI Founding Facts (synthetic source)
+        founding = (kg.company.profile or {}).get("founding_facts_web")
+        if founding:
+            lines = []
+            if founding.get("legal_name"):
+                lines.append(f"Legal name: {founding['legal_name']}")
+            if founding.get("incorporation_date"):
+                lines.append(f"Incorporation date: {founding['incorporation_date']}")
+            if founding.get("jurisdiction"):
+                lines.append(f"Jurisdiction: {founding['jurisdiction']}")
+            if founding.get("registered_address"):
+                lines.append(f"Registered address: {founding['registered_address']}")
+            regs = founding.get("registration_numbers") or []
+            if regs:
+                parts = [
+                    f"{r.get('system')}={r.get('id')}"
+                    for r in regs
+                    if r.get("system") and r.get("id")
+                ]
+                if parts:
+                    lines.append("Registration numbers: " + "; ".join(parts))
+            if founding.get("hq"):
+                lines.append(f"HQ: {founding['hq']}")
+            if founding.get("origin_context"):
+                lines.append(f"Origin context: {founding['origin_context']}")
+            if founding.get("ownership_notes"):
+                lines.append(f"Ownership: {founding['ownership_notes']}")
+
+            if lines:
+                all_snippets.append(
+                    {
+                        "provider": "openai-web",
+                        "title": f"OpenAI web-derived founding facts for {kg.company.name}",
+                        "snippet": "\n".join(lines),
+                        "url": None,
+                    }
+                )
+
+        # PDL Company funding details (derived from funding_rounds)
+        # (Currently populated via PDL Company data if available, but keeps
+        # the slot ready for a future dedicated PitchBook connector).
         if kg.company.funding_rounds:
-            summary_lines: list[str] = []
-            for r in kg.company.funding_rounds:
-                # Keep this format extremely compact; no need to implement in full now.
-                # Example: "2023-06-01 – Series A: $30m, lead=Sequoia Capital"
-                summary_lines.append("...")  # Implementation later
+            lines: list[str] = []
+            # Sort rounds by date descending if possible
+            try:
+                sorted_rounds = sorted(
+                    kg.company.funding_rounds,
+                    key=lambda x: x.get("date") or "1900-01-01",
+                    reverse=True,
+                )
+            except Exception:
+                sorted_rounds = kg.company.funding_rounds
+
+            for r in sorted_rounds[:15]:
+                parts: list[str] = []
+                if r.get("date"):
+                    parts.append(r["date"])
+                if r.get("type"):
+                    parts.append(r["type"])
+                if r.get("amount"):
+                    amt = r["amount"]
+                    cur = r.get("currency") or ""
+                    parts.append(f"{amt} {cur}".strip())
+                if r.get("investors_companies"):
+                    inv = ", ".join(r["investors_companies"][:3])
+                    parts.append(f"investors={inv}")
+                lines.append(" – ".join(parts))
 
             all_snippets.append(
                 {
-                    "provider": "pitchbook",
-                    "title": f"PitchBook funding summary for {kg.company.name}",
-                    "snippet": "\n".join(summary_lines),
+                    "provider": "pdl_company",
+                    "title": f"PDL company funding details for {kg.company.name}",
+                    "snippet": "\n".join(lines),
                     "url": None,
                 }
             )
