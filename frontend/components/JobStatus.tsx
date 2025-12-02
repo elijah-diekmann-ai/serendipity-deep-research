@@ -199,13 +199,8 @@ export default function JobStatus({ jobId }: { jobId: string }) {
     return () => clearInterval(interval);
   }, [jobId]);
 
-  if (!job)
-    return (
-      <div className="p-4 text-center text-gray-500">Loading job status...</div>
-    );
-
   const isStuck =
-    job.status === "PROCESSING" && pollCount >= 60; // ~5 minutes at 5s/poll
+    job?.status === "PROCESSING" && pollCount >= 60; // ~5 minutes at 5s/poll
 
   const citationsToShow: Citation[] = useMemo(() => {
     if (!brief) return [];
@@ -231,6 +226,11 @@ export default function JobStatus({ jobId }: { jobId: string }) {
     });
     return map;
   }, [renderedCitations]);
+
+  if (!job)
+    return (
+      <div className="p-4 text-center text-gray-500">Loading job status...</div>
+    );
 
   const resolvedEntity = trace.find(
     (evt) => evt.phase === "ENTITY_RESOLUTION" && evt.meta?.company_name
