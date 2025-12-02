@@ -1,17 +1,25 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useMemo } from "react";
 import axios from "axios";
 import { API_BASE_URL } from "../lib/api";
 import ReactMarkdown from "react-markdown";
 
 const CITATION_LINK_REGEX = /\[S(\d+)\](?!\()/g;
 
-function addCitationAnchors(markdown: string): string {
+function addCitationAnchors(
+  markdown: string,
+  citationIndexMap: Record<number, number>
+): string {
   if (!markdown) return markdown;
   return markdown.replace(
     CITATION_LINK_REGEX,
-    (_match, id) => `[S${id}](#source-${id})`
+    (_match, id) => {
+      const numericId = Number(id);
+      const shortIndex = citationIndexMap[numericId];
+      const displayLabel = shortIndex ? `S${shortIndex}` : `S${id}`;
+      return `[${displayLabel}](#source-${numericId})`;
+    }
   );
 }
 
@@ -199,11 +207,30 @@ export default function JobStatus({ jobId }: { jobId: string }) {
   const isStuck =
     job.status === "PROCESSING" && pollCount >= 60; // ~5 minutes at 5s/poll
 
-  const citationsToShow: Citation[] = brief
-    ? (showAllCitations
-        ? brief.all_citations ?? brief.citations ?? []
-        : brief.used_citations ?? brief.citations ?? [])
-    : [];
+  const citationsToShow: Citation[] = useMemo(() => {
+    if (!brief) return [];
+    const list = showAllCitations
+      ? brief.all_citations ?? brief.citations ?? []
+      : brief.used_citations ?? brief.citations ?? [];
+    return Array.isArray(list) ? list : [];
+  }, [brief, showAllCitations]);
+
+  const renderedCitations = useMemo(
+    () =>
+      citationsToShow.filter(
+        (citation): citation is Citation & { id: number } =>
+          Boolean(citation) && typeof citation.id === "number"
+      ),
+    [citationsToShow]
+  );
+
+  const citationIndexMap = useMemo(() => {
+    const map: Record<number, number> = {};
+    renderedCitations.forEach((citation, idx) => {
+      map[citation.id] = idx + 1;
+    });
+    return map;
+  }, [renderedCitations]);
 
   const resolvedEntity = trace.find(
     (evt) => evt.phase === "ENTITY_RESOLUTION" && evt.meta?.company_name
@@ -427,7 +454,10 @@ export default function JobStatus({ jobId }: { jobId: string }) {
               const text = value as string;
               // Ensure lists starting on the first line are parsed as lists by ReactMarkdown
               const markdownContent = text.trim().startsWith("-") ? `\n${text}` : text;
-              const markdownWithAnchors = addCitationAnchors(markdownContent);
+              const markdownWithAnchors = addCitationAnchors(
+                markdownContent,
+                citationIndexMap
+              );
               const isUnverified = text.startsWith("⚠️ UNVERIFIED");
 
               return (
@@ -449,7 +479,7 @@ export default function JobStatus({ jobId }: { jobId: string }) {
             })}
 
             {/* Sources Section */}
-            {citationsToShow && citationsToShow.length > 0 && (
+            {renderedCitations.length > 0 && (
               <section className="pt-4">
                 <div className="flex items-center justify-between mb-3">
                   <h2 className="text-xl font-semibold text-gray-900">SOURCES</h2>
@@ -470,14 +500,14 @@ export default function JobStatus({ jobId }: { jobId: string }) {
                     )}
                 </div>
                 <ul className="list-none space-y-2 text-base text-gray-600">
-                  {citationsToShow.map((source: Citation) => (
+                  {renderedCitations.map((source: Citation) => (
                     <li
                       key={source.id}
                       id={`source-${source.id}`}
-                      className="flex gap-2 items-start"
+                      className="source-entry flex gap-2 items-start rounded-lg px-3 py-2 transition-colors duration-300"
                     >
                       <span className="font-mono text-sm text-blue-600 bg-blue-50 px-1 rounded mt-1">
-                        [S{source.id}]
+                        {citationIndexMap[source.id] ? `[S${citationIndexMap[source.id]}]` : `[S${source.id}]`}
                       </span>
                       <div className="flex-1 min-w-0 space-y-1">
                         <a
