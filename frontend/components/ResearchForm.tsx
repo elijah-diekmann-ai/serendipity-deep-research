@@ -68,11 +68,31 @@ export default function ResearchForm({ onJobCreated }: Props) {
   const [isExiting, setIsExiting] = useState(false);
   const [promptError, setPromptError] = useState<string | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [targetType, setTargetType] = useState<"company" | "person">("company");
+  const [personName, setPersonName] = useState("");
+  const [personAffiliation, setPersonAffiliation] = useState("");
+  const [personLocation, setPersonLocation] = useState("");
 
   const inferred = buildPayloadFromPrompt(prompt);
   const effectiveCompanyName =
     overrideCompanyName.trim() || inferred.company_name || "";
   const effectiveWebsite = overrideWebsite.trim() || inferred.website || "";
+  const displayPersonName =
+    personName.trim() ||
+    overrideCompanyName.trim() ||
+    inferred.company_name ||
+    "";
+
+  const handleModeChange = (mode: "company" | "person") => {
+    setTargetType(mode);
+    setPromptError(null);
+    if (mode === "person" && !personName) {
+      const seed = overrideCompanyName.trim() || inferred.company_name || "";
+      if (seed) {
+        setPersonName(seed);
+      }
+    }
+  };
 
   async function handleSubmit(e?: React.FormEvent) {
     if (e) e.preventDefault();
@@ -92,15 +112,47 @@ export default function ResearchForm({ onJobCreated }: Props) {
     try {
       const autoPayload = buildPayloadFromPrompt(trimmed);
 
-      const company_name =
-        overrideCompanyName.trim() || autoPayload.company_name;
-      const websiteValue = overrideWebsite.trim() || autoPayload.website || null;
+      const inferredCompany =
+        overrideCompanyName.trim() || autoPayload.company_name || "";
+      const websiteValue =
+        overrideWebsite.trim() || autoPayload.website || null;
 
-      const resp = await axios.post(`${API_BASE_URL}/research`, {
-        company_name,
-        website: websiteValue,
+      const requestBody: Record<string, any> = {
+        target_type: targetType,
         context: trimmed,
-      });
+      };
+
+      if (websiteValue) {
+        requestBody.website = websiteValue;
+      }
+
+      if (targetType === "company") {
+        if (!inferredCompany) {
+          setPromptError("Please provide a company name or override.");
+          setLoading(false);
+          return;
+        }
+        requestBody.company_name = inferredCompany;
+      } else {
+        const resolvedPersonName =
+          personName.trim() || inferredCompany || "";
+        if (!resolvedPersonName) {
+          setPromptError("Please provide a person name to research.");
+          setLoading(false);
+          return;
+        }
+        requestBody.person_name = resolvedPersonName;
+        if (personAffiliation.trim()) {
+          requestBody.company_name = personAffiliation.trim();
+        } else if (inferredCompany) {
+          requestBody.company_name = inferredCompany;
+        }
+        if (personLocation.trim()) {
+          requestBody.location = personLocation.trim();
+        }
+      }
+
+      const resp = await axios.post(`${API_BASE_URL}/research`, requestBody);
 
       // Start exit animation
       setIsExiting(true);
@@ -132,6 +184,31 @@ export default function ResearchForm({ onJobCreated }: Props) {
     >
       {/* Chat Input Interface */}
       <form onSubmit={handleSubmit} className="chat-interface w-full relative">
+        <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider font-mono text-white/60 mb-3">
+          <span>Mode:</span>
+          <button
+            type="button"
+            onClick={() => handleModeChange("company")}
+            className={`px-3 py-1 rounded-full border transition-colors ${
+              targetType === "company"
+                ? "border-white/80 text-white"
+                : "border-white/20 text-white/40 hover:text-white/70"
+            }`}
+          >
+            Company
+          </button>
+          <button
+            type="button"
+            onClick={() => handleModeChange("person")}
+            className={`px-3 py-1 rounded-full border transition-colors ${
+              targetType === "person"
+                ? "border-white/80 text-white"
+                : "border-white/20 text-white/40 hover:text-white/70"
+            }`}
+          >
+            Person
+          </button>
+        </div>
         <div className="input-wrapper relative">
           <div className="glass-bar">
             <textarea
@@ -162,8 +239,22 @@ export default function ResearchForm({ onJobCreated }: Props) {
         {/* Line Data Metadata */}
         <div className="mt-4 font-mono text-xs text-white/40 flex flex-wrap items-center gap-2 cursor-pointer hover:text-white/60 transition-colors" onClick={() => setShowAdvanced(!showAdvanced)}>
           <span className="hover:underline decoration-white/30 underline-offset-4">
-            Target: {effectiveCompanyName || "—"}
+            Mode: {targetType === "person" ? "Person" : "Company"}
           </span>
+          <span className="text-white/20">/</span>
+          <span className="hover:underline decoration-white/30 underline-offset-4">
+            {targetType === "person"
+              ? `Person: ${displayPersonName || "—"}`
+              : `Company: ${effectiveCompanyName || "—"}`}
+          </span>
+          {targetType === "person" && (
+            <>
+              <span className="text-white/20">/</span>
+              <span className="hover:underline decoration-white/30 underline-offset-4">
+                Location: {personLocation || "—"}
+              </span>
+            </>
+          )}
           <span className="text-white/20">/</span>
           <span className="hover:underline decoration-white/30 underline-offset-4">
             Website: {effectiveWebsite || "—"}
@@ -199,6 +290,47 @@ export default function ResearchForm({ onJobCreated }: Props) {
                 placeholder="https://example.com"
                 value={overrideWebsite}
                 onChange={(e) => setOverrideWebsite(e.target.value)}
+              />
+            </div>
+          </div>
+        )}
+
+        {targetType === "person" && (
+          <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4 pt-4 border-t border-white/10 font-mono text-xs">
+            <div className="md:col-span-1">
+              <label className="block mb-2 text-white/40 uppercase tracking-wider text-[10px]">
+                Person Name (Required)
+              </label>
+              <input
+                type="text"
+                className="w-full bg-transparent border-b border-white/20 py-1 text-white/80 focus:border-white/60 focus:outline-none transition-colors placeholder:text-white/10"
+                placeholder="Ada Lovelace"
+                value={personName}
+                onChange={(e) => setPersonName(e.target.value)}
+              />
+            </div>
+            <div className="md:col-span-1">
+              <label className="block mb-2 text-white/40 uppercase tracking-wider text-[10px]">
+                Affiliated Company (Optional)
+              </label>
+              <input
+                type="text"
+                className="w-full bg-transparent border-b border-white/20 py-1 text-white/80 focus:border-white/60 focus:outline-none transition-colors placeholder:text-white/10"
+                placeholder="OpenAI"
+                value={personAffiliation}
+                onChange={(e) => setPersonAffiliation(e.target.value)}
+              />
+            </div>
+            <div className="md:col-span-1">
+              <label className="block mb-2 text-white/40 uppercase tracking-wider text-[10px]">
+                Location (Optional)
+              </label>
+              <input
+                type="text"
+                className="w-full bg-transparent border-b border-white/20 py-1 text-white/80 focus:border-white/60 focus:outline-none transition-colors placeholder:text-white/10"
+                placeholder="San Francisco, CA"
+                value={personLocation}
+                onChange={(e) => setPersonLocation(e.target.value)}
               />
             </div>
           </div>

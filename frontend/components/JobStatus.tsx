@@ -5,11 +5,42 @@ import axios from "axios";
 import { API_BASE_URL } from "../lib/api";
 import ReactMarkdown from "react-markdown";
 
+const CITATION_LINK_REGEX = /\[S(\d+)\](?!\()/g;
+
+function addCitationAnchors(markdown: string): string {
+  if (!markdown) return markdown;
+  return markdown.replace(
+    CITATION_LINK_REGEX,
+    (_match, id) => `[S${id}](#source-${id})`
+  );
+}
+
+type LLMUsageTotals = {
+  input?: number;
+  output?: number;
+  cached_input?: number;
+  reasoning_output?: number;
+  web_search_calls?: number;
+};
+
+type LLMProviderUsage = {
+  model?: string;
+  cost_usd?: number;
+  totals?: LLMUsageTotals;
+};
+
+type LLMUsage = {
+  providers?: Record<string, LLMProviderUsage>;
+  total_cost_usd?: number;
+};
+
 type Job = {
   id: string;
   status: "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED";
   created_at: string;
   completed_at?: string;
+  total_cost_usd?: number | null;
+  llm_usage?: LLMUsage | null;
 };
 
 type Citation = {
@@ -68,6 +99,26 @@ function renderMeta(evt: TraceEvent): string {
   }
   if (evt.phase === "WRITING" && evt.step?.startsWith("section:")) {
     return "Using curated sources and enforcing citation rules.";
+  }
+  if (evt.phase === "COSTS") {
+    if (typeof m.total_cost_usd === "number") {
+      return `Total cost so far: $${m.total_cost_usd.toFixed(4)}`;
+    }
+    const openaiTotals = m.openai_totals;
+    if (openaiTotals) {
+      const tokens = [
+        typeof openaiTotals.input === "number" && `in=${openaiTotals.input}`,
+        typeof openaiTotals.output === "number" && `out=${openaiTotals.output}`,
+        typeof m.openai_cost_usd === "number" &&
+          `cost=$${Number(m.openai_cost_usd).toFixed(4)}`,
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      return tokens || "";
+    }
+    if (typeof m.openai_cost_usd === "number") {
+      return `Web-search cost so far: $${Number(m.openai_cost_usd).toFixed(4)}`;
+    }
   }
   return "";
 }
@@ -159,6 +210,9 @@ export default function JobStatus({ jobId }: { jobId: string }) {
   );
   const companyName = resolvedEntity?.meta?.company_name as string | undefined;
   const domain = resolvedEntity?.meta?.domain as string | undefined;
+  const providerEntries = job.llm_usage?.providers
+    ? Object.entries(job.llm_usage.providers)
+    : [];
 
   const latestTraceId = trace.length > 0 ? trace[trace.length - 1].id : null;
 
@@ -200,6 +254,49 @@ export default function JobStatus({ jobId }: { jobId: string }) {
                 We&apos;re collecting sources and drafting your brief. The full write-up
                 will appear below as soon as it&apos;s ready.
               </p>
+            )}
+
+            {typeof job.total_cost_usd === "number" && (
+              <div className="mt-4 text-xs text-gray-600">
+                Total API cost:{" "}
+                <span className="font-mono">
+                  ${Number(job.total_cost_usd).toFixed(4)}
+                </span>
+              </div>
+            )}
+
+            {providerEntries.length > 0 && (
+              <details className="mt-2 text-xs text-gray-700">
+                <summary className="cursor-pointer underline decoration-dotted">
+                  Cost breakdown
+                </summary>
+                <div className="mt-2 space-y-2">
+                  {providerEntries.map(([providerKey, providerData]) => (
+                    <div key={providerKey} className="space-y-0.5">
+                      <div className="font-semibold text-gray-900">
+                        {providerKey}
+                        {providerData.model && (
+                          <span className="text-gray-500 font-normal">
+                            {" "}
+                            · {providerData.model}
+                          </span>
+                        )}
+                      </div>
+                      <div className="font-mono text-gray-700">
+                        in={providerData.totals?.input ?? 0} · out=
+                        {providerData.totals?.output ?? 0}
+                        {typeof providerData.totals?.cached_input === "number" &&
+                          ` · cached=${providerData.totals?.cached_input}`}
+                        {typeof providerData.totals?.web_search_calls === "number" &&
+                          providerData.totals?.web_search_calls > 0 &&
+                          ` · web_search_calls=${providerData.totals?.web_search_calls}`}
+                        {" · cost=$"}
+                        {Number(providerData.cost_usd || 0).toFixed(4)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </details>
             )}
           </div>
 
@@ -330,6 +427,7 @@ export default function JobStatus({ jobId }: { jobId: string }) {
               const text = value as string;
               // Ensure lists starting on the first line are parsed as lists by ReactMarkdown
               const markdownContent = text.trim().startsWith("-") ? `\n${text}` : text;
+              const markdownWithAnchors = addCitationAnchors(markdownContent);
               const isUnverified = text.startsWith("⚠️ UNVERIFIED");
 
               return (
@@ -344,7 +442,7 @@ export default function JobStatus({ jobId }: { jobId: string }) {
                     </div>
                   )}
                   <div className="prose prose-sm max-w-none text-gray-700 [&>h1]:hidden [&>h2]:hidden [&>h3]:!text-base [&>h3]:font-semibold [&>h3]:mt-4 [&>h3]:mb-2 [&>p]:!text-sm [&>ul]:list-disc [&>ul]:pl-5 [&>ol]:list-decimal [&>ol]:pl-5 [&>ul>li]:!text-sm [&>ul>li]:mb-2 [&>ol>li]:!text-sm [&>ol>li]:mb-2">
-                    <ReactMarkdown>{markdownContent}</ReactMarkdown>
+                    <ReactMarkdown>{markdownWithAnchors}</ReactMarkdown>
                   </div>
                 </section>
               );
@@ -373,18 +471,27 @@ export default function JobStatus({ jobId }: { jobId: string }) {
                 </div>
                 <ul className="list-none space-y-2 text-base text-gray-600">
                   {citationsToShow.map((source: Citation) => (
-                    <li key={source.id} className="flex gap-2 items-center">
-                      <span className="font-mono text-sm text-blue-600 bg-blue-50 px-1 rounded">
+                    <li
+                      key={source.id}
+                      id={`source-${source.id}`}
+                      className="flex gap-2 items-start"
+                    >
+                      <span className="font-mono text-sm text-blue-600 bg-blue-50 px-1 rounded mt-1">
                         [S{source.id}]
                       </span>
-                      <a
-                        href={source.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="hover:underline truncate block flex-1"
-                      >
-                        {source.title || source.url}
-                      </a>
+                      <div className="flex-1 min-w-0 space-y-1">
+                        <a
+                          href={source.url || undefined}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="hover:underline block truncate"
+                        >
+                          {source.title || source.url || "Untitled source"}
+                        </a>
+                        <div className="text-xs text-gray-500 break-all">
+                          {source.url || "URL unavailable"}
+                        </div>
+                      </div>
                       <span className="text-sm text-gray-400 whitespace-nowrap">
                         ({source.provider})
                       </span>

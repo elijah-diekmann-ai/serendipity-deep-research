@@ -1,5 +1,3 @@
-# backend/app/services/planner.py
-
 from __future__ import annotations
 
 from typing import TypedDict, List, Dict, Any, Optional
@@ -73,12 +71,115 @@ def _extract_domain(website: Optional[str]) -> Optional[str]:
         return website.split("://")[-1].split("/")[0]
 
 
+def _person_plan(target_input: dict) -> List[PlanStep]:
+    """
+    Deterministic plan for researching a person.
+    Focuses on biography, interviews, career moves, and recent news.
+    """
+    person_name = (target_input.get("person_name") or target_input.get("company_name") or "").strip()
+    context = (target_input.get("context") or "").strip()
+    # If the user provided a "company_name" alongside a person target, treat it as an affiliation hint
+    company_hint = target_input.get("company_name") if target_input.get("person_name") else None
+    if not company_hint and target_input.get("target_type") == "person":
+         # Fallback: maybe they put the company in 'context' or didn't provide one.
+         pass
+         
+    context_hint = ""
+    if context:
+        context_hint = " " + " ".join(context.split()[:20])
+        
+    affil_hint = ""
+    if company_hint:
+        affil_hint = f" {company_hint}"
+
+    steps: List[PlanStep] = []
+    
+    # Time windows
+    today = datetime.utcnow().date()
+    recent_news_start_date = (today - timedelta(days=730)).isoformat() # ~2 years
+
+    # 1. Exa Profile Search (Bio, Interviews, Talks)
+    steps.append({
+      "name": "search_exa_person_profile",
+      "connector": "exa",
+      "params": {
+        "mode": "search",
+        "queries": [
+          f'"{person_name}" biography founder investor{affil_hint}{context_hint}',
+          f'"{person_name}" interview talk podcast panel{affil_hint}',
+          f'"{person_name}" linkedin twitter x.com profile{affil_hint}',
+        ],
+        "category": "person", 
+        "num_results": 10,
+      },
+    })
+
+    # 2. Exa Recent News / Mentions
+    steps.append({
+      "name": "search_exa_person_news",
+      "connector": "exa",
+      "params": {
+        "mode": "search",
+        "queries": [
+          f'"{person_name}" funding investment round{affil_hint}',
+          f'"{person_name}" joins leaves role appointed{affil_hint}',
+          f'"{person_name}" controversy lawsuit allegations{affil_hint}',
+        ],
+        "category": "news",
+        "start_published_date": recent_news_start_date,
+      },
+    })
+
+    # 3. Exa Long-form / Thought Leadership
+    steps.append({
+      "name": "search_exa_person_longform",
+      "connector": "exa",
+      "params": {
+        "mode": "search",
+        "queries": [
+          f'"{person_name}" keynote keynote speech fireside chat{affil_hint}',
+          f'"{person_name}" op-ed article essay thought leadership{affil_hint}',
+        ],
+        "category": "person",
+        "num_results": 8,
+      },
+    })
+
+    # 4. PDL Person Search (if key available)
+    pdl_key = getattr(settings, "PDL_API_KEY", None)
+    if pdl_key:
+        steps.append({
+            "name": "pdl_people_discovery",
+            "connector": "pdl",
+            "params": {
+                "full_name": person_name,
+                "company": company_hint,
+                "location": target_input.get("location"),
+            },
+        })
+
+    # 5. Agentic Web Search (OpenAI) - Bio & Career History Fallback
+    # Critical for cases where PDL misses or we need unstructured web evidence.
+    steps.append({
+        "name": "openai_person_profile",
+        "connector": "openai_web",
+        "params": {
+            "mode": "person",
+            "person_name": person_name,
+            "company": company_hint,
+            "context": context,
+        },
+    })
+        
+    return steps
+
+
 def _default_plan(target_input: dict) -> List[PlanStep]:
     """
     Deterministic hybrid plan aligned to the high-density brief structure.
-
+    
     High-level strategy under the MAX_EXA_QUERIES budget:
-
+    
     - Use Exa where it is strongest: high-recall similarity + date-filtered web
       search for factual evidence:
         * Deep crawl of the company's own site (overview, founding, HQ,
@@ -87,15 +188,15 @@ def _default_plan(target_input: dict) -> List[PlanStep]:
         * Deep facts/evidence (patents, regulatory filings, technical benchmarks,
           clinical/industrial capacity).
         * Recent news in the last ~12–24 months.
-
+    
     - Use OpenAI web search where broad world knowledge and reasoning are needed:
         * Competitor discovery and qualification for the Competitors section is
           routed to the `openai_web` connector, which uses OpenAI's web_search
           tool + reasoning to propose a curated competitor set.
-
+    
     - Maintain optional registry / enrichment connectors (GLEIF, PDL) for
       structured identifiers and leadership data.
-
+    
     NOTE: We explicitly do NOT use Exa for competitor discovery anymore.
     """
     company_name = (target_input.get("company_name") or "").strip()
@@ -385,6 +486,21 @@ def _default_plan(target_input: dict) -> List[PlanStep]:
             }
         )
 
+    # --- Step 4.5: Agentic news augmentation (OpenAI) ---
+    if company_name or website:
+        steps.append(
+            {
+                "name": "openai_recent_news",
+                "connector": "openai_web",
+                "params": {
+                    "mode": "news",
+                    "company_name": company_name,
+                    "website": website,
+                    "context": context,
+                },
+            }
+        )
+
     # --- Step 5: Reasoning-first competitor discovery (OpenAI web_search) ---
     if company_name or website:
         steps.append(
@@ -505,10 +621,10 @@ def _default_plan(target_input: dict) -> List[PlanStep]:
 def plan_research(target_input: dict) -> List[PlanStep]:
     """
     Entry point used by the orchestrator.
-
+    
     We use a deterministic hybrid plan instead of an LLM-based planner now. This
     guarantees that we always:
-
+    
     - Hit the company website (with subpages) for founding, HQ, identifiers,
       team, product, and tech (Exa).
     - Pull recent news from the open web (Exa).
@@ -519,9 +635,15 @@ def plan_research(target_input: dict) -> List[PlanStep]:
     - Use `pdl_company` for firmographics.
     """
     try:
-        plan = _default_plan(target_input)
-        logger.info("Planner generated hybrid Exa + OpenAI plan", extra={"step": "plan"})
-        return plan
+        target_type = (target_input or {}).get("target_type") or "company"
+        if target_type == "person":
+            plan = _person_plan(target_input)
+            logger.info("Planner generated PERSON plan", extra={"step": "plan", "target_type": "person"})
+        else:
+            plan = _default_plan(target_input)
+            logger.info("Planner generated hybrid Exa + OpenAI COMPANY plan", extra={"step": "plan", "target_type": "company"})
+
+        return plan[:MAX_PLANNER_STEPS]
     except Exception as e:
         logger.exception("Planner failed unexpectedly, returning empty plan: %s", e)
         return []

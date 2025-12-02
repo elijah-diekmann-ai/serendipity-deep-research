@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, JSON, Enum, DateTime
+from sqlalchemy import Column, String, JSON, Enum, DateTime, Numeric
 from sqlalchemy.dialects.postgresql import UUID
 from datetime import datetime
 import uuid
@@ -20,4 +20,6 @@ class ResearchJob(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     completed_at = Column(DateTime, nullable=True)
     error_message = Column(String, nullable=True)
+    llm_usage = Column(JSON, nullable=True)
+    total_cost_usd = Column(Numeric(14, 6), nullable=True)
 

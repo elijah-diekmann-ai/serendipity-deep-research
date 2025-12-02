@@ -537,8 +537,11 @@ class PDLConnector(BaseConnector):
         Unified entrypoint expected by the orchestrator.
 
         Expected params:
-        - company_domain: str (preferred)
-        - company_name: str (fallback)
+        - company_domain: str (preferred for company search)
+        - company_name: str (fallback for company search)
+        - full_name: str (REQUIRED for person lookup)
+        - location: str (optional for person lookup)
+        - linkedin_url: str (optional for person lookup)
 
         Returns:
             ConnectorResult({
@@ -549,11 +552,69 @@ class PDLConnector(BaseConnector):
             logger.info("PDL_API_KEY not configured; returning empty result.")
             return ConnectorResult({})
 
+        # 1. Person Lookup / Enrichment Mode
+        full_name = kwargs.get("full_name")
+        if full_name:
+            # We are looking for a specific person. Use enrichment logic.
+            person_input = {
+                "name": full_name,
+                "company": kwargs.get("company_name"),
+                "linkedin_url": kwargs.get("linkedin_url"),
+                "location": kwargs.get("location"),
+                "key": "target_person"
+            }
+            
+            # enrich_many expects a list and returns a dict keyed by 'key'
+            enriched_map = await self.enrich_many([person_input])
+            pdl_data = enriched_map.get("target_person")
+            
+            people = []
+            if pdl_data:
+                # Normalize to the same shape as search results so downstream can ingest it uniformly
+                # PDL enrichment returns the flat person object directly.
+                p = pdl_data
+                
+                # Extract name
+                fn = p.get("full_name") or full_name
+                
+                # Extract current job info
+                job_title = p.get("job_title") or p.get("job_title_role")
+                job_company = p.get("job_company_name") or p.get("employer")
+                job_company_domain = p.get("job_company_website")
+                
+                # Profiles
+                linkedin_url = p.get("linkedin_url")
+                photo_url = None
+                # If enrichment returns 'profiles' list, check it too? 
+                # Usually top-level linkedin_url is best.
+                
+                people.append({
+                    "pdl_id": p.get("id"),
+                    "full_name": fn,
+                    "title": job_title,
+                    "company": job_company,
+                    "company_domain": job_company_domain,
+                    "linkedin_url": linkedin_url,
+                    "photo_url": photo_url, # might be deeper in payload
+                    "source": "pdl",
+                    "pdl_data": p,
+                })
+                
+            # Cache key for person lookup
+            # We don't cache enrichment in this connector usually (cached_get is for HTTP), 
+            # but here we are wrapping it. enrich_many calls HTTP which is not cached inside PDLConnector 
+            # except via logic? No, PDLConnector calls requests directly.
+            # Let's not add extra caching layer here for now as it's specific 
+            # and PDL might return different things.
+            
+            return ConnectorResult({"people": people})
+
+        # 2. Company Leadership Search Mode
         company_domain = kwargs.get("company_domain")
         company_name = kwargs.get("company_name")
 
         if not company_domain and not company_name:
-            logger.debug("PDL fetch requires company_domain or company_name.")
+            logger.debug("PDL fetch requires full_name (person) or company_domain/name (company).")
             return ConnectorResult({})
 
         cache_key = (

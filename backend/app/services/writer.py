@@ -1,10 +1,10 @@
-# backend/app/services/writer.py
-
 from __future__ import annotations
 
+from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
 from uuid import UUID
-from typing import Any, List, Set, Tuple
+from typing import Any, Dict, List, Set, Tuple
 from datetime import datetime, timedelta
 import textwrap
 import json
@@ -19,6 +19,7 @@ from ..core.config import get_settings
 from ..models.source import Source
 from .entity_resolution import KnowledgeGraph
 from .llm import get_llm_client, limit_llm_concurrency
+from .llm_costs import LLMCostTracker, cost_for_tokens
 from .caching import cached_get
 from .tracing import trace_job_step
 
@@ -29,7 +30,7 @@ logger = logging.getLogger(__name__)
 # Section Specifications
 # -----------------------------------------------------------------------------
 
-SECTION_SPECS = [
+COMPANY_SECTION_SPECS = [
     (
         "executive_summary",
         (
@@ -234,6 +235,47 @@ SECTION_SPECS = [
     ),
 ]
 
+PERSON_SECTION_SPECS = [
+    (
+        "person_summary",
+        (
+            "Produce a high-density summary of the individual as an operator or investor.\n\n"
+            "- Focus on current role(s), domain expertise, and what they are known for.\n"
+            "- Summarise track record (companies started, roles held, major exits).\n"
+            "- Highlight sectors, stages, or geographies they focus on.\n"
+            "- Every factual claim must end with one or more [S<ID>] citations.\n"
+            "- Be explicit: this brief is about a person, not a company. Do not attribute company stats (revenue, headcount) "
+            "to the person unless they are the primary owner."
+        ),
+    ),
+    (
+        "career_history",
+        (
+            "Summarise the person's career timeline with emphasis on high-signal roles.\n\n"
+            "- Use reverse-chronological bullets: Role, company, years, and key responsibilities.\n"
+            "- Prefer primary sources and PDL enrichment; cite each bullet.\n"
+            "- If dates are approximate, state that.\n"
+            "- Highlight any board seats or advisory roles if distinct from operational roles."
+        ),
+    ),
+    (
+        "education_and_credentials",
+        (
+            "Summarise degrees, institutions, and other credentials (e.g. professional memberships).\n\n"
+            "- One bullet per major degree or credential, with dates if visible.\n"
+            "- Include any academic awards or publications if mentioned in sources."
+        ),
+    ),
+    (
+        "recent_mentions",
+        (
+            "List important public mentions (press, blog posts, podcasts, talks) from roughly the last 5–10 years.\n\n"
+            "- Reverse-chronological bullets with bold dates and short descriptions.\n"
+            "- Focus on thought leadership, interviews, or significant news about companies they led at the time."
+        ),
+    ),
+]
+
 # --- Context management / token budgeting constants ---
 
 NUMERIC_HEAVY_SECTIONS = {
@@ -241,6 +283,8 @@ NUMERIC_HEAVY_SECTIONS = {
     "fundraising",
     "recent_news",
     "technology",
+    # Person-specific numeric sections
+    "career_history",
 }
 
 MAX_SOURCE_TOKENS = 6000
@@ -256,6 +300,7 @@ MAX_SECTION_TOKENS = 5000
 # -----------------------------------------------------------------------------
 
 SECTION_SOURCE_POLICY: dict[str, dict[str, Any]] = {
+    # --- Company Sections ---
     "executive_summary": {
         # default: all sources (no filter)
     },
@@ -279,8 +324,22 @@ SECTION_SOURCE_POLICY: dict[str, dict[str, Any]] = {
         "allowed_providers": {"openai-web", "exa"},
     },
     "recent_news": {
-        "allowed_providers": {"exa"},
+        "allowed_providers": {"exa", "openai-web"},
         "recent_only": True,  # uses published_date filter
+    },
+    # --- Person Sections ---
+    "person_summary": {
+        "allowed_providers": {"pdl", "openai-web", "exa", "apollo"},
+    },
+    "career_history": {
+        "allowed_providers": {"pdl", "openai-web", "exa", "apollo"},
+    },
+    "education_and_credentials": {
+        "allowed_providers": {"pdl", "openai-web", "exa", "apollo"},
+    },
+    "recent_mentions": {
+        "allowed_providers": {"exa", "openai-web"},
+        "recent_only": False, # wider window for person history
     },
 }
 
@@ -330,6 +389,7 @@ LEGAL_NAME_SUFFIXES: tuple[str, ...] = (
     " corp",
     " corporation",
     " holdings",
+    " club",
 )
 
 PATENT_HEAVY_DOMAINS: set[str] = {
@@ -383,11 +443,93 @@ def _sanitize_snippet(text: str) -> str:
     return sanitized
 
 
+
+@dataclass
+class SectionTaskInput:
+    section_name: str
+    instruction: str
+    sources_str: str
+    used_source_ids: Set[int]
+    is_numeric_heavy: bool
+
+
 class Writer:
-    def __init__(self, db: Session, job_id: UUID, request_id: str | None = None):
+    def __init__(
+        self,
+        db: Session,
+        job_id: UUID,
+        request_id: str | None = None,
+        cost_tracker: LLMCostTracker | None = None,
+    ):
         self.db = db
         self.job_id = job_id
         self.request_id = request_id
+        self.cost_tracker = cost_tracker
+
+    def _usage_value(self, usage: Any, attr: str) -> int:
+        if usage is None:
+            return 0
+        if isinstance(usage, dict):
+            value = usage.get(attr)
+        else:
+            value = getattr(usage, attr, None)
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def _usage_detail_value(self, usage: Any, attr: str, sub_attr: str) -> int:
+        if usage is None:
+            return 0
+        if isinstance(usage, dict):
+            container = usage.get(attr)
+        else:
+            container = getattr(usage, attr, None)
+        if container is None:
+            return 0
+        if isinstance(container, dict):
+            value = container.get(sub_attr)
+        else:
+            value = getattr(container, sub_attr, None)
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def _record_llm_usage(
+        self,
+        *,
+        provider: str,
+        model: str | None,
+        kind: str,
+        section: str | None,
+        usage: Any,
+    ) -> None:
+        if not self.cost_tracker or usage is None:
+            return
+
+        prompt = self._usage_value(usage, "prompt_tokens")
+        completion = self._usage_value(usage, "completion_tokens")
+        cached = self._usage_detail_value(
+            usage, "prompt_tokens_details", "cached_tokens"
+        )
+        reasoning = self._usage_detail_value(
+            usage, "completion_tokens_details", "reasoning_tokens"
+        )
+        model_id = model or settings.LLM_MODEL
+        cost = cost_for_tokens(model_id, prompt, completion, cached)
+
+        self.cost_tracker.add_record(
+            provider=provider,
+            model=model_id,
+            kind=kind,
+            section=section,
+            input_tokens=prompt,
+            output_tokens=completion,
+            cached_input_tokens=cached,
+            reasoning_output_tokens=reasoning,
+            cost_usd=cost,
+        )
 
     # -------------------------------------------------------------------------
     # Persistence helpers
@@ -819,6 +961,13 @@ Output 3–6 short bullet points or a compact paragraph (max ~140 words).
                         extra_body=extra_body,
                     )
                 summary = (resp.choices[0].message.content or "").strip()
+                self._record_llm_usage(
+                    provider="openrouter",
+                    model=getattr(resp, "model", settings.LLM_MODEL),
+                    kind="writer:snippet_summary",
+                    section=None,
+                    usage=getattr(resp, "usage", None),
+                )
                 return summary or None
 
             summary = await asyncio.to_thread(_call_sync)
@@ -1081,6 +1230,19 @@ Output 3–6 short bullet points or a compact paragraph (max ~140 words).
                 )
                 raise
 
+        usage = getattr(resp, "usage", None)
+        model_id = getattr(resp, "model", settings.LLM_MODEL)
+        kind = f"writer:{section_name}"
+        if attempt_fix:
+            kind += ":repair"
+        self._record_llm_usage(
+            provider="openrouter",
+            model=model_id,
+            kind=kind,
+            section=section_name,
+            usage=usage,
+        )
+
         return resp.choices[0].message.content or ""
 
     def _hallucination_check(
@@ -1222,6 +1384,14 @@ Output 3–6 short bullet points or a compact paragraph (max ~140 words).
                 max_tokens=MAX_SECTION_TOKENS,
                 extra_body=extra_body,
             )
+
+        self._record_llm_usage(
+            provider="openrouter",
+            model=getattr(resp, "model", settings.LLM_MODEL),
+            kind=f"writer:{section_name}:numeric_guard",
+            section=section_name,
+            usage=getattr(resp, "usage", None),
+        )
 
         revised = (resp.choices[0].message.content or "").strip()
         if not revised:
@@ -1553,6 +1723,28 @@ Output 3–6 short bullet points or a compact paragraph (max ~140 words).
             "gleif": "GLEIF",
         }
 
+        # Person-target enrichment sources (so biographies can cite PDL/Apollo data)
+        if getattr(kg, "target_type", "company") == "person" and getattr(kg, "person", None):
+            person_enrichment = getattr(kg.person, "enrichment", {}) or {}
+            for provider_key, enrichment_obj in person_enrichment.items():
+                if provider_key in {None, "", "openai_bio"}:
+                    # OpenAI bio evidence already produces snippets; skip synthetic duplicates.
+                    continue
+                display_name = provider_display_name.get(provider_key, provider_key)
+                snippet_text = self._build_enrichment_snippet(
+                    person_full_name=kg.person.full_name,
+                    provider_key=provider_key,
+                    enrichment_obj=enrichment_obj or {},
+                )
+                all_snippets.append(
+                    {
+                        "provider": provider_key,
+                        "title": f"{display_name} profile: {kg.person.full_name}",
+                        "snippet": snippet_text,
+                        "url": kg.person.linkedin_url,
+                    }
+                )
+
         # Person-level enrichment sources (Companies House officers, PDL, etc.)
         # We intentionally *exclude* Apollo here, and instead create a dedicated
         # Apollo company/people profile source using structured data.
@@ -1706,6 +1898,7 @@ Output 3–6 short bullet points or a compact paragraph (max ~140 words).
         profile_for_context["apollo_firmographics"] = firmographics
 
         context_json = {
+            "target_type": getattr(kg, "target_type", "company"),
             "company": profile_for_context
             | {
                 "name": kg.company.name,
@@ -1715,6 +1908,19 @@ Output 3–6 short bullet points or a compact paragraph (max ~140 words).
                 "companies_house_number": kg.company.companies_house_number,
                 "funding_rounds": kg.company.funding_rounds,  # NEW
             },
+            "person": (
+                {
+                    "full_name": kg.person.full_name,
+                    "primary_role": kg.person.primary_role,
+                    "primary_company": kg.person.primary_company,
+                    "linkedin_url": kg.person.linkedin_url,
+                    "location": kg.person.location,
+                    # Include raw enrichment so the LLM can mine biography details
+                    "enrichment": kg.person.enrichment,
+                }
+                if getattr(kg, "person", None)
+                else None
+            ),
             "people": [
                 {
                     "full_name": p.full_name,
@@ -1738,70 +1944,121 @@ Output 3–6 short bullet points or a compact paragraph (max ~140 words).
 
         brief: dict[str, Any] = {}
 
-        for section_name, instruction in SECTION_SPECS:
+        # Select section specs based on target_type
+        if getattr(kg, "target_type", "company") == "person":
+            section_specs = PERSON_SECTION_SPECS
+        else:
+            section_specs = COMPANY_SECTION_SPECS
+
+        section_tasks: List[SectionTaskInput] = []
+
+        for section_name, instruction in section_specs:
             # Filter sources based on section-level policy
             section_sources = self._select_sources_for_section(
                 section_name, sources, kg
             )
 
-            # Apply time-based filtering for recent_news section
-            if section_name == "recent_news":
-                section_sources = self._filter_recent_news_sources(section_sources)
+            # Apply time-based filtering for recent_news / recent_mentions section
+            if section_name in {"recent_news", "recent_mentions"}:
+                policy = SECTION_SOURCE_POLICY.get(section_name, {})
+                if policy.get("recent_only", False):
+                    section_sources = self._filter_recent_news_sources(section_sources)
 
             if not section_sources:
                 brief[section_name] = "Not enough data found."
                 continue
 
             # Build section-specific source context
+            # NOTE: This runs sequentially in the main thread, preserving internal async/await
+            # behavior for snippet summarisation if needed.
             sources_str, used_source_ids = self._build_source_list(section_sources)
 
             if not sources_str.strip():
                 brief[section_name] = "Not enough data found."
                 continue
 
-            # Track used sources for final citations
-            all_used_source_ids |= used_source_ids
-
+            # Trace start of preparation
             trace_job_step(
                 self.job_id,
                 phase="WRITING",
                 step=f"section:{section_name}:start",
                 label=f"Drafting section: {section_name.replace('_', ' ').title()}",
-                detail=f"Using {len(used_source_ids)} curated sources for this section.",
+                detail=f"Prepared {len(used_source_ids)} sources. Queuing for generation.",
             )
 
+            section_tasks.append(
+                SectionTaskInput(
+                    section_name=section_name,
+                    instruction=instruction,
+                    sources_str=sources_str,
+                    used_source_ids=used_source_ids,
+                    is_numeric_heavy=section_name in NUMERIC_HEAVY_SECTIONS,
+                )
+            )
+
+        # Helper for parallel execution
+        def _run_section_task(task: SectionTaskInput) -> Tuple[str, str, Set[int]]:
             raw_text = self._call_llm(
-                section_name, instruction, context_str, sources_str
+                task.section_name,
+                task.instruction,
+                context_str,
+                task.sources_str,
             )
 
             text = self._hallucination_check(
                 raw_text,
-                used_source_ids,  # section-specific
-                section_name,
-                instruction,
+                task.used_source_ids,
+                task.section_name,
+                task.instruction,
                 context_str,
-                sources_str,
+                task.sources_str,
             )
 
-            if section_name in NUMERIC_HEAVY_SECTIONS:
+            if task.is_numeric_heavy:
                 text = self._enforce_numeric_citation_coverage(
                     text,
-                    used_source_ids,  # section-specific
-                    section_name,
-                    instruction,
+                    task.used_source_ids,
+                    task.section_name,
+                    task.instruction,
                     context_str,
-                    sources_str,
+                    task.sources_str,
                 )
 
-            brief[section_name] = text
+            return task.section_name, text, task.used_source_ids
 
-            trace_job_step(
-                self.job_id,
-                phase="WRITING",
-                step=f"section:{section_name}:done",
-                label=f"Section complete: {section_name.replace('_', ' ').title()}",
-                detail="Section drafted and post-processed for citations.",
-            )
+        # Execute in parallel
+        max_workers = getattr(settings, "LLM_MAX_CONCURRENCY", 4)
+        if max_workers < 1:
+            max_workers = 1
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_section = {
+                executor.submit(_run_section_task, task): task.section_name
+                for task in section_tasks
+            }
+
+            for future in as_completed(future_to_section):
+                section_name = future_to_section[future]
+                try:
+                    s_name, text, used_ids = future.result()
+                    brief[s_name] = text
+                    all_used_source_ids |= used_ids
+
+                    trace_job_step(
+                        self.job_id,
+                        phase="WRITING",
+                        step=f"section:{section_name}:done",
+                        label=f"Section complete: {section_name.replace('_', ' ').title()}",
+                        detail="Section drafted and post-processed for citations.",
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "Section generation failed for %s: %s",
+                        section_name,
+                        exc,
+                        extra={"job_id": str(self.job_id)},
+                    )
+                    brief[section_name] = "Error generating section."
 
         # Build citations after all sections are processed
         all_citations = [

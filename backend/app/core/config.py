@@ -50,6 +50,8 @@ class Settings(BaseSettings):
     LLM_MODEL: str = "openai/gpt-5.1"
     # Hard cap on concurrent LLM calls per process
     LLM_MAX_CONCURRENCY: int = 4
+    LLM_PRICEBOOK_JSON: str | None = None
+    WEB_SEARCH_PER_CALL_USD: float = 0.01
 
     # data retention (in days)
     RESEARCH_RETENTION_DAYS: int = 90

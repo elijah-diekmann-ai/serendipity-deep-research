@@ -1,5 +1,3 @@
-# backend/app/services/entity_resolution.py
-
 from __future__ import annotations
 
 import asyncio
@@ -201,7 +199,7 @@ class DomainCandidate:
 @dataclass
 class PersonNode:
     """
-    In-graph representation of a person.
+    In-graph representation of a person (colleague/officer/associated).
 
     identity_source:
         - "web": extracted from generic web/filings/registries (default).
@@ -222,6 +220,21 @@ class PersonNode:
     apollo_person_id: Optional[str] = None
     # enrichment is provider -> provider-specific payload
     enrichment: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class PersonTargetNode:
+    """
+    Primary person target for "person" mode research.
+    """
+    full_name: str
+    normalized_name: str
+    linkedin_url: Optional[str] = None
+    primary_role: Optional[str] = None        # e.g. "CEO, Acme Robotics"
+    primary_company: Optional[str] = None
+    location: Optional[str] = None
+    enrichment: Dict[str, Any] = field(default_factory=dict)
+    web_snippets: List[Dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -255,7 +268,9 @@ class CompanyNode:
 
 @dataclass
 class KnowledgeGraph:
-    company: CompanyNode
+    company: Optional[CompanyNode]
+    target_type: Literal["company", "person", "unknown"] = "company"
+    person: Optional[PersonTargetNode] = None
 
 
 def _extract_domain_from_url(url: str) -> Optional[str]:
@@ -655,6 +670,9 @@ def resolve_entities(raw_results: dict, target_input: Optional[dict] = None) -> 
     - Leave Apollo firmographics explicit on CompanyNode so the Writer can treat
       them as a fallback when web/filings don't disclose scale.
     """
+    target_type = (target_input or {}).get("target_type") or "company"
+    person_name = (target_input or {}).get("person_name") or ""
+    
     web_snippets: List[Dict[str, Any]] = []
     domain_snippet_candidates: List[Dict[str, Any]] = []
     seen_urls: set[str] = set()
@@ -696,6 +714,80 @@ def resolve_entities(raw_results: dict, target_input: Optional[dict] = None) -> 
             for r in rounds:
                 if isinstance(r, dict):
                     funding_rounds_structured.append(r)
+    
+    # --- BRANCH: PERSON TARGET ---
+    if target_type == "person":
+        pdl_data = (
+            raw_results.get("pdl_people_discovery")
+            or raw_results.get("pdl_person_search")
+            or {}
+        )
+        pdl_people = pdl_data.get("people") or []
+        
+        # Agentic web search results (Bio + Timeline)
+        openai_person_res = raw_results.get("openai_person_profile", {}) or {}
+        openai_snippets = openai_person_res.get("snippets") or []
+        person_bio = openai_person_res.get("person_bio", {})
+        
+        # Heuristic: Pick the best PDL candidate if available
+        candidate = None
+        if pdl_people and person_name:
+            norm_target = _normalize_name(person_name)
+            for p in pdl_people:
+                 if _normalize_name(p.get("full_name") or "") == norm_target:
+                     candidate = p
+                     break
+            # DO NOT fallback to the first PDL result if no name match.
+            # It is better to have a sparse profile than a wrong one (e.g. CEO instead of engineer).
+                
+        # Combine snippets: Exa + OpenAI Bio
+        combined_snippets = web_snippets + openai_snippets
+        
+        # Build PersonTargetNode
+        if candidate:
+            full_name = candidate.get("full_name") or person_name
+            node = PersonTargetNode(
+                full_name=full_name,
+                normalized_name=_normalize_name(full_name),
+                linkedin_url=candidate.get("linkedin_url"),
+                primary_role=candidate.get("title"),
+                primary_company=candidate.get("organization") or candidate.get("job_company_name"),
+                location=candidate.get("location_name") or candidate.get("location"),
+                enrichment={"pdl": candidate.get("pdl_data") or candidate, "openai_bio": person_bio},
+                web_snippets=combined_snippets
+            )
+        else:
+            # Fallback: Use OpenAI agentic bio if PDL failed
+            openai_person = person_bio.get("person") or {}
+            full_name = openai_person.get("name") or person_name
+            
+            node = PersonTargetNode(
+                full_name=full_name,
+                normalized_name=_normalize_name(full_name),
+                linkedin_url=openai_person.get("linkedin_url"),
+                primary_role=openai_person.get("current_role"),
+                primary_company=openai_person.get("current_company"),
+                # OpenAI bio usually provides summary but not location explicitly in top-level
+                enrichment={"openai_bio": person_bio},
+                web_snippets=combined_snippets
+            )
+            
+        # Stub CompanyNode for backward compatibility with Writer
+        company_stub = CompanyNode(
+            name=person_name,
+            profile={"person_target": True},
+            web_snippets=combined_snippets,
+            people=[], 
+            competitors=competitors_structured
+        )
+        
+        return KnowledgeGraph(
+            target_type="person",
+            company=company_stub,
+            person=node
+        )
+        
+    # --- BRANCH: COMPANY TARGET (Existing Logic) ---
 
     ch_data = raw_results.get("companies_house_lookup", {}) or {}
     apollo_data = raw_results.get("people_enrichment", {}) or {}

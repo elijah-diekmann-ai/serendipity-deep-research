@@ -5,6 +5,7 @@ import logging
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime
+from decimal import Decimal
 
 from ..core.celery_app import celery_app
 from ..core.db import SessionLocal
@@ -18,6 +19,7 @@ from .entity_resolution import resolve_entities, KnowledgeGraph
 from .intent import normalize_target_input
 from .writer import Writer
 from .tracing import trace_job_step
+from .llm_costs import LLMCostTracker
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +28,10 @@ def _persist_company_and_people(db: Session, kg: KnowledgeGraph) -> None:
     """
     Upsert Company and Person rows based on the resolved KnowledgeGraph.
     """
+    if getattr(kg, "target_type", "company") != "company":
+        # Person-target jobs should not create placeholder company records.
+        return
+
     company_node = kg.company
 
     # Upsert company by domain when available; otherwise treat as a new record
@@ -134,6 +140,7 @@ def run_research_job(self, job_id: str):
         raw_target_input = job.target_input or {}
         target_input = normalize_target_input(raw_target_input)
         request_id = target_input.get("request_id")
+        tracker = LLMCostTracker(job_id=str(job.id))
 
         trace_job_step(
             job.id,
@@ -200,6 +207,43 @@ def run_research_job(self, job_id: str):
             extra={"job_id": str(job.id), "request_id": request_id, "step": "connectors"},
         )
 
+        # Record connector usage (e.g., OpenAI web search)
+        for step_name, payload in (raw_results or {}).items():
+            if not isinstance(payload, dict):
+                continue
+            usage = payload.get("usage") or {}
+            if not usage:
+                continue
+            cost_meta = payload.get("cost") or {}
+            tracker.add_record(
+                provider="openai",
+                model=usage.get("model"),
+                kind=f"openai_web:{step_name}",
+                section=None,
+                input_tokens=int(usage.get("input_tokens") or 0),
+                output_tokens=int(usage.get("output_tokens") or 0),
+                cached_input_tokens=int(usage.get("cached_input_tokens") or 0),
+                reasoning_output_tokens=int(usage.get("reasoning_output_tokens") or 0),
+                web_search_calls=int(usage.get("web_search_calls") or 0),
+                tool_cost_usd=float(cost_meta.get("web_search_tool_cost_usd") or 0.0),
+                cost_usd=float(cost_meta.get("model_cost_usd") or 0.0),
+            )
+
+        connector_usage_preview = tracker.summarize()
+        openai_totals = connector_usage_preview.get("providers", {}).get("openai")
+        if openai_totals:
+            trace_job_step(
+                job.id,
+                phase="COSTS",
+                step="connectors",
+                label="Accumulated OpenAI web-search usage",
+                detail="Web search token usage recorded.",
+                meta={
+                    "openai_totals": openai_totals.get("totals", {}),
+                    "openai_cost_usd": openai_totals.get("cost_usd"),
+                },
+            )
+
         # Phase 3: Entity Resolution
         trace_job_step(
             job.id,
@@ -235,7 +279,12 @@ def run_research_job(self, job_id: str):
             label="Drafting investment brief",
             detail="Compressing sources and drafting sections with the LLM.",
         )
-        writer = Writer(db=db, job_id=job.id, request_id=request_id)
+        writer = Writer(
+            db=db,
+            job_id=job.id,
+            request_id=request_id,
+            cost_tracker=tracker,
+        )
         brief_json = writer.generate_brief(kg)
 
         trace_job_step(
@@ -250,6 +299,13 @@ def run_research_job(self, job_id: str):
         db.merge(brief)
         job.status = JobStatus.COMPLETED
         job.completed_at = datetime.utcnow()
+        summary_usage = tracker.summarize()
+        job.llm_usage = summary_usage
+        total_cost_value = summary_usage.get("total_cost_usd")
+        if total_cost_value is not None:
+            job.total_cost_usd = Decimal(str(total_cost_value))
+        else:
+            job.total_cost_usd = None
         db.commit()
 
         trace_job_step(
@@ -259,6 +315,15 @@ def run_research_job(self, job_id: str):
             label="Research job completed",
             detail="Brief is ready to view.",
         )
+        if total_cost_value is not None:
+            trace_job_step(
+                job.id,
+                phase="COSTS",
+                step="final",
+                label="LLM usage recorded",
+                detail="Drafting and web-search costs captured.",
+                meta={"total_cost_usd": float(total_cost_value)},
+            )
 
         logger.info(
             "Research job completed",
