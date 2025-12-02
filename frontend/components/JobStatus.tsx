@@ -131,6 +131,15 @@ function renderMeta(evt: TraceEvent): string {
   return "";
 }
 
+function getSafeHostname(url?: string): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return null;
+  }
+}
+
 export default function JobStatus({ jobId }: { jobId: string }) {
   const [job, setJob] = useState<Job | null>(null);
   const [brief, setBrief] = useState<Brief | null>(null);
@@ -204,10 +213,41 @@ export default function JobStatus({ jobId }: { jobId: string }) {
 
   const citationsToShow: Citation[] = useMemo(() => {
     if (!brief) return [];
-    const list = showAllCitations
+    let list = showAllCitations
       ? brief.all_citations ?? brief.citations ?? []
       : brief.used_citations ?? brief.citations ?? [];
-    return Array.isArray(list) ? list : [];
+    list = Array.isArray(list) ? list : [];
+
+    // Ensure all IDs referenced in the text are present in the list
+    const referencedIds = new Set<number>();
+    const regex = /\[S(\d+)\](?!\()/g;
+    Object.values(brief).forEach((val) => {
+      if (typeof val === "string") {
+        let match;
+        // Reset lastIndex for each string if reusing regex instance, or create new one
+        const localRegex = new RegExp(regex);
+        while ((match = localRegex.exec(val)) !== null) {
+          referencedIds.add(Number(match[1]));
+        }
+      }
+    });
+
+    const existingIds = new Set(list.map((c) => c.id));
+    const missingIds = Array.from(referencedIds).filter(
+      (id) => !existingIds.has(id)
+    );
+
+    if (missingIds.length > 0) {
+      const placeholders: Citation[] = missingIds.map((id) => ({
+        id,
+        title: "Referenced Source (Details unavailable)",
+        provider: "unknown",
+        url: undefined,
+      }));
+      return [...list, ...placeholders];
+    }
+
+    return list;
   }, [brief, showAllCitations]);
 
   const renderedCitations = useMemo(
@@ -219,13 +259,19 @@ export default function JobStatus({ jobId }: { jobId: string }) {
     [citationsToShow]
   );
 
+  // Stable index map: based on all_citations, independent of filters
   const citationIndexMap = useMemo(() => {
+    const all = brief?.all_citations ?? brief?.citations ?? [];
     const map: Record<number, number> = {};
-    renderedCitations.forEach((citation, idx) => {
-      map[citation.id] = idx + 1;
-    });
+    if (Array.isArray(all)) {
+      all.forEach((citation, idx) => {
+        if (citation && typeof citation.id === "number") {
+          map[citation.id] = idx + 1;
+        }
+      });
+    }
     return map;
-  }, [renderedCitations]);
+  }, [brief]);
 
   if (!job)
     return (
@@ -472,7 +518,35 @@ export default function JobStatus({ jobId }: { jobId: string }) {
                     </div>
                   )}
                   <div className="prose prose-sm max-w-none text-gray-700 [&>h1]:hidden [&>h2]:hidden [&>h3]:!text-base [&>h3]:font-semibold [&>h3]:mt-4 [&>h3]:mb-2 [&>p]:!text-sm [&>ul]:list-disc [&>ul]:pl-5 [&>ol]:list-decimal [&>ol]:pl-5 [&>ul>li]:!text-sm [&>ul>li]:mb-2 [&>ol>li]:!text-sm [&>ol>li]:mb-2">
-                    <ReactMarkdown>{markdownWithAnchors}</ReactMarkdown>
+                    <ReactMarkdown
+                      components={{
+                        a({ href, children, ...props }) {
+                          if (href?.startsWith("#source-")) {
+                            const id = Number(href.replace("#source-", ""));
+                            const citation = renderedCitations.find((c) => c.id === id);
+                            const title = citation?.title || citation?.url || "Source";
+                            const domain = getSafeHostname(citation?.url) || citation?.provider;
+
+                            return (
+                              <a
+                                href={href}
+                                title={domain ? `${title} – ${domain}` : title}
+                                {...props}
+                              >
+                                {children}
+                              </a>
+                            );
+                          }
+                          return (
+                            <a href={href} {...props}>
+                              {children}
+                            </a>
+                          );
+                        },
+                      }}
+                    >
+                      {markdownWithAnchors}
+                    </ReactMarkdown>
                   </div>
                 </section>
               );
@@ -500,33 +574,39 @@ export default function JobStatus({ jobId }: { jobId: string }) {
                     )}
                 </div>
                 <ul className="list-none space-y-2 text-base text-gray-600">
-                  {renderedCitations.map((source: Citation) => (
-                    <li
-                      key={source.id}
-                      id={`source-${source.id}`}
-                      className="source-entry flex gap-2 items-start rounded-lg px-3 py-2 transition-colors duration-300"
-                    >
-                      <span className="font-mono text-sm text-blue-600 bg-blue-50 px-1 rounded mt-1">
-                        {citationIndexMap[source.id] ? `[S${citationIndexMap[source.id]}]` : `[S${source.id}]`}
-                      </span>
-                      <div className="flex-1 min-w-0 space-y-1">
-                        <a
-                          href={source.url || undefined}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="hover:underline block truncate"
-                        >
-                          {source.title || source.url || "Untitled source"}
-                        </a>
-                        <div className="text-xs text-gray-500 break-all">
-                          {source.url || "URL unavailable"}
+                  {renderedCitations.map((source: Citation) => {
+                    const domain = getSafeHostname(source.url);
+
+                    return (
+                      <li
+                        key={source.id}
+                        id={`source-${source.id}`}
+                        className="source-entry flex gap-2 items-start rounded-lg px-3 py-2 transition-colors duration-300"
+                      >
+                        <span className="font-mono text-sm text-blue-600 bg-blue-50 px-1 rounded mt-1">
+                          {citationIndexMap[source.id]
+                            ? `[S${citationIndexMap[source.id]}]`
+                            : `[S${source.id}]`}
+                        </span>
+                        <div className="flex-1 min-w-0 space-y-1">
+                          <a
+                            href={source.url || undefined}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="hover:underline block truncate"
+                          >
+                            {source.title || source.url || "Untitled source"}
+                          </a>
+                          <div className="text-xs text-gray-500 break-all">
+                            {domain || "URL unavailable"}
+                          </div>
                         </div>
-                      </div>
-                      <span className="text-sm text-gray-400 whitespace-nowrap">
-                        ({source.provider})
-                      </span>
-                    </li>
-                  ))}
+                        <span className="text-[10px] font-mono uppercase tracking-wide px-1.5 py-0.5 rounded bg-gray-100 text-gray-500">
+                          {source.provider}
+                        </span>
+                      </li>
+                    );
+                  })}
                 </ul>
               </section>
             )}

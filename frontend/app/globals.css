@@ -152,3 +152,18 @@ body {
   background-color: rgba(59, 130, 246, 0.1);
   box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.2);
 }
+
+/* Make inline citations small and unobtrusive */
+.prose a[href^="#source-"] {
+  font-size: 0.7em;
+  vertical-align: super;
+  text-decoration: none;
+  padding: 0 0.15rem;
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.08);
+  color: #2563eb;
+}
+
+.prose a[href^="#source-"]:hover {
+  background: rgba(59, 130, 246, 0.15);
+}
