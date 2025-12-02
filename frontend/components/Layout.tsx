@@ -1,5 +1,6 @@
 import Link from "next/link";
 import React from "react";
+import { ThemeEffect } from "./ThemeEffect";
 
 type LayoutProps = {
   children: React.ReactNode;
@@ -27,6 +28,7 @@ export default function Layout({
         isPage ? "justify-start" : "justify-center"
       } relative overflow-hidden ${mainClassName || ""}`}
     >
+      <ThemeEffect theme={isPage ? "light" : "dark"} />
       {/* Left-hand nav / Logo */}
       <div className="absolute top-8 left-8 z-50 flex items-center gap-4">
         {showLogo && (

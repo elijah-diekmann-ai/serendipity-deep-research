@@ -17,6 +17,24 @@
   
   /* Lightest gradient color for research page background */
   --bg-research-light: #E0E7FF; /* A very light indigo/white, approximating the lightest point of the gradient */
+  
+  /* Inverted Light Gradient */
+  --bg-light-deep: #F8FAFC;      /* Very light gray/white */
+  --bg-light-horizon: #E0E7FF;   /* Light indigo */
+  --bg-gradient-light: linear-gradient(180deg, var(--bg-light-deep) 0%, var(--bg-light-horizon) 45%, var(--bg-light-horizon) 55%, var(--bg-light-deep) 100%);
+
+  /* Glass Design Variables */
+  --lg-bg-color: rgba(255, 255, 255, 0.25);
+  --lg-highlight: rgba(255, 255, 255, 0.75);
+  --lg-text: #ffffff;
+  --lg-hover-glow: rgba(255, 255, 255, 0.4);
+  --lg-red: #fb4268;
+  --lg-grey: #5b5b5b;
+}
+
+.bg-horizon-light {
+  background: var(--bg-gradient-light);
+  min-height: 100vh;
 }
 
 /* --- GLASS PANEL FOR RESULTS / STATUS --- */
@@ -30,12 +48,58 @@
   box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.15); /* Softer, diffused shadow */
 }
 
+/* Floating glass card (Light Mode) - Refined with specular overlay layers */
+.glass-panel-light {
+  position: relative;
+  background: rgba(255, 255, 255, 0.65); /* Slightly more transparent base */
+  border-radius: 24px;
+  box-shadow: 
+    0 6px 6px rgba(0, 0, 0, 0.02), 
+    0 0 20px rgba(0, 0, 0, 0.02); /* Softer, ambient shadow */
+  overflow: hidden; /* Needed for internal absolute overlays */
+  z-index: 1;
+}
+
+/* The blur filter layer */
+.glass-panel-light::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -2;
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+}
+
+/* The specular/highlight overlay */
+.glass-panel-light::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: 24px;
+  pointer-events: none;
+  box-shadow: 
+    inset 1px 1px 0 rgba(255, 255, 255, 0.75), /* Highlight top/left */
+    inset 0 0 5px rgba(255, 255, 255, 0.75);   /* Soft inner glow */
+}
+
+html, body {
+  height: 100%;
+  width: 100%;
+}
+
 body {
   background: var(--bg-gradient);
+  background-attachment: fixed;
   color: var(--text-primary);
   min-height: 100vh;
   margin: 0;
   font-family: 'Inter', -apple-system, sans-serif;
+}
+
+body.theme-light {
+  background: var(--bg-gradient-light);
+  background-attachment: fixed;
 }
 
 /* --- CHAT LAYOUT CSS (Adapted from Reference) --- */
@@ -166,4 +230,76 @@ body {
 
 .prose a[href^="#source-"]:hover {
   background: rgba(59, 130, 246, 0.15);
+}
+
+/* ========== GLASS DESIGN ========== */
+
+/* ========== GLASS CONTAINER ========== */
+
+.glass-container {
+  position: relative;
+  display: flex;
+  background: transparent;
+  border-radius: 2rem;
+  overflow: hidden;
+  box-shadow: 0 6px 6px rgba(0, 0, 0, 0.2), 0 0 20px rgba(0, 0, 0, 0.1);
+  transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 2.2);
+  width: 100%;
+}
+
+.glass-container--rounded {
+    border-radius: 2rem;
+}
+
+.glass-container--large {
+  /* min-width: 32rem; */
+}
+
+/* ========== GLASS LAYERS ========== */
+
+.glass-filter {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  backdrop-filter: blur(0px);
+  /* filter: url(#lg-dist); -- REMOVED to fix wiggling distortion */
+  isolation: isolate;
+  pointer-events: none;
+}
+
+.glass-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: var(--lg-bg-color);
+  pointer-events: none;
+}
+
+.glass-specular {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  border-radius: inherit;
+  overflow: hidden;
+  box-shadow: inset 1px 1px 0 var(--lg-highlight),
+    inset 0 0 5px var(--lg-highlight);
+  pointer-events: none;
+}
+
+.glass-content {
+  position: relative;
+  z-index: 3;
+  display: block;
+  width: 100%;
+  padding: 2rem;
+}
+
+.glass-content a img {
+  display: block;
+  width: 75px;
+  transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 2.2);
+}
+
+.glass-content a img:hover {
+  transform: scale(0.95);
 }

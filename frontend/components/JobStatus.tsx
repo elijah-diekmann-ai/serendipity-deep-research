@@ -392,35 +392,45 @@ export default function JobStatus({ jobId }: { jobId: string }) {
               <button
                 type="button"
                 onClick={() => setShowSystemThoughts((prev) => !prev)}
-                className="text-xs font-mono uppercase tracking-wider text-gray-500 hover:text-gray-800 flex items-center gap-1"
+                className="group flex items-center gap-2 px-3 py-1.5 rounded-md bg-black/5 hover:bg-black/10 transition-all text-[11px] uppercase tracking-wider font-medium text-gray-500 hover:text-gray-900"
               >
-                <span>
-                  {showSystemThoughts
-                    ? "Hide system thoughts"
-                    : "View system thoughts"}
-                </span>
-                <span
-                  className={`transform transition-transform duration-300 ${
+                <span>SYSTEM THOUGHTS</span>
+                <svg
+                  width="10"
+                  height="6"
+                  viewBox="0 0 10 6"
+                  fill="none"
+                  xmlns="http://www.w3.org/2000/svg"
+                  className={`text-gray-400 group-hover:text-gray-600 transition-transform duration-300 ${
                     showSystemThoughts ? "rotate-180" : ""
                   }`}
                 >
-                  ▼
-                </span>
+                  <path
+                    d="M1 1L5 5L9 1"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
               </button>
             )}
           </div>
         </div>
 
         <div
-          className={`overflow-hidden transition-[max-height,opacity] duration-500 ease-in-out ${
-            showSystemThoughts ? "max-h-[500px] opacity-100" : "max-h-0 opacity-0"
+          className={`grid transition-all duration-500 ease-in-out ${
+            showSystemThoughts
+              ? "grid-rows-[1fr] opacity-100 mt-4"
+              : "grid-rows-[0fr] opacity-0 mt-0"
           }`}
         >
-          <div
-            ref={scrollRef}
-            onScroll={handleTraceScroll}
-            className="mt-4 border border-black/10 bg-black/5 rounded-lg p-3 text-xs text-gray-800 max-h-72 overflow-y-auto trace-scroll-shadow"
-          >
+          <div className="overflow-hidden min-h-0">
+            <div
+              ref={scrollRef}
+              onScroll={handleTraceScroll}
+              className="border border-black/10 bg-black/5 rounded-lg p-3 text-xs text-gray-800 max-h-72 overflow-y-auto trace-scroll-shadow"
+            >
             <div className="font-mono text-[10px] text-gray-500 mb-2">
               SYSTEM THOUGHTS – high-level trace of the research pipeline
             </div>
@@ -475,6 +485,7 @@ export default function JobStatus({ jobId }: { jobId: string }) {
             )}
           </div>
         </div>
+      </div>
 
         {job.status === "FAILED" && (
           <div className="mt-4 bg-red-50 border border-red-200 p-4 rounded text-red-700 text-sm">
@@ -485,8 +496,13 @@ export default function JobStatus({ jobId }: { jobId: string }) {
 
       {/* Brief card */}
       {brief && (
-        <div className="p-8 glass-panel !bg-white !border-gray-200 !shadow-sm rounded-xl">
-          <div className="space-y-8">
+        <>
+          <div className="glass-container glass-container--rounded">
+            <div className="glass-filter"></div>
+            <div className="glass-overlay"></div>
+            <div className="glass-specular"></div>
+            <div className="glass-content">
+              <div className="space-y-8">
             {Object.entries(brief).map(([key, value]) => {
               if (
                 key === "citations" ||
@@ -610,8 +626,10 @@ export default function JobStatus({ jobId }: { jobId: string }) {
                 </ul>
               </section>
             )}
+              </div>
+            </div>
           </div>
-        </div>
+        </>
       )}
     </div>
   );
