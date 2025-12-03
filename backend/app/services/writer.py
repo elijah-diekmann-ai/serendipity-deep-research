@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 from uuid import UUID
 from typing import Any, Dict, List, Set, Tuple
 from datetime import datetime, timedelta
+from collections import OrderedDict
 import textwrap
 import json
 import re
@@ -36,12 +37,12 @@ COMPANY_SECTION_SPECS = [
         (
             "Produce an investor-grade, high-density executive summary of the company.\n\n"
             "Formatting rules:\n"
-            "- Start with 5–10 bullet points (use '- '), each beginning with a bold label "
-            "followed by a colon, e.g. '- **Business:** …'.\n"
+            "- Start with 5–6 bullet points (use '- '), each beginning with a bold label "
+            "followed by a colon, e.g. '- **Business:** …'. Keep each bullet within ~12–15 words.\n"
             "- Every bullet that contains a factual claim MUST end with one or more [S<ID>] "
             "citations.\n"
             "- After the bullets, you MAY include at most one short synthesis paragraph "
-            "(<= 120 words) that connects the dots (opportunity vs. risk).\n\n"
+            "(<= 80 words) that connects the dots (opportunity vs. risk).\n\n"
             "Mandatory bullets when evidence exists (if a field is not covered in the sources, "
             "include a bullet explicitly stating that it is 'Not disclosed in available sources'):\n"
             "- **Business / offering:** One-line description of what the company actually sells or does.\n"
@@ -70,6 +71,8 @@ COMPANY_SECTION_SPECS = [
             "- Use a bullet list of key–value pairs. Each bullet starts with a bold label and colon, "
             "e.g. '- **Legal entity:** …'.\n"
             "- Every factual bullet must carry at least one [S<ID>] citation.\n\n"
+            "Brevity:\n"
+            "- Aim for 6–9 bullets; each bullet should stay within ~20 words and avoid narrative paragraphs.\n\n"
             "Mandatory bullets when evidence exists (otherwise state 'Not disclosed in available sources'):\n"
             "- **Legal entity:** Full legal name and entity type (Ltd, Inc, GmbH, Pty Ltd, etc.).\n"
             "- **Incorporation / registration date:** Explicit date (YYYY-MM-DD or best available granularity).\n"
@@ -103,6 +106,7 @@ COMPANY_SECTION_SPECS = [
             "  '- **Full Name – Role(s):** 2–4 sentence mini-biography covering current role, "
             "prior employers, repeat-founder status, and any visible education or domain expertise. [S<ID>]'\n"
             "- Then add shorter bullets summarising any additional visible leaders, board members, or advisors.\n"
+            "- Cap spotlights at 3; every subsequent leader summary must fit into a single <=20-word bullet.\n"
             "- Use Apollo-derived identity (names, titles, LinkedIn) as the anchor where available, and use People Data "
             "Labs enrichment for deeper work-history and education detail when present, explicitly citing those sources. [S<ID>]\n"
             "- Every factual claim about a person (role, employer, degree, dates) must carry at least one [S<ID>] citation.\n\n"
@@ -126,6 +130,8 @@ COMPANY_SECTION_SPECS = [
             "- Where possible, present equity rounds in reverse-chronological order with explicit dates, amounts, "
             "investors, and any valuation signals.\n"
             "- Every numeric claim must have at least one [S<ID>] citation.\n\n"
+            "Brevity:\n"
+            "- Focus on the most recent 5–7 line-items; aggregate older rounds into a single bullet if necessary.\n\n"
             "Mandatory elements when available:\n"
             "- **Equity funding history:** List rounds (e.g. Seed, Series A, etc., or 'undisclosed round'), with date, "
             "amount raised, lead and notable investors, and any explicit valuation or share-price disclosure.\n"
@@ -152,6 +158,8 @@ COMPANY_SECTION_SPECS = [
             "Formatting rules:\n"
             "- Use bullets with bold labels.\n"
             "- Group related details (e.g. core products, target segments, pricing, go-to-market).\n\n"
+            "Brevity:\n"
+            "- Stay within 4–8 bullets, each <= ~22 words with noun-phrase phrasing; no prose paragraphs.\n\n"
             "Content to cover where supported by evidence:\n"
             "- **Core offering:** Main products/platforms/services (by name if available) and what problem they solve.\n"
             "- **Target customers & segments:** Industries, company sizes, geographies, or user personas.\n"
@@ -172,6 +180,8 @@ COMPANY_SECTION_SPECS = [
             "- Use bullets with bold labels.\n"
             "- Do NOT simplify or 'dumb down' technical terms; preserve identifiers and jargon exactly as used in sources "
             "(e.g. patent IDs, protocol names, process nodes, clinical phases).\n\n"
+            "Brevity:\n"
+            "- Bullets only; target <= ~22 words each while keeping identifiers intact.\n\n"
             "Content to cover where evidence exists (adapt to the domain – software, hardware, biotech, industrial, etc.):\n"
             "- **Architecture & key components:** High-level system architecture, main modules, and how they interact "
             "(e.g. cloud services, on-prem hardware, ASICs, lab equipment, manufacturing lines).\n"
@@ -203,7 +213,8 @@ COMPANY_SECTION_SPECS = [
             "substitute, e.g. '- **Competitor – Direct:** Comparison with the target on product, segment, and moat. [S<ID>]'.\n"
             "- Group bullets into Direct competitors, Adjacent players, and Substitutes.\n"
             "- Within each group, order bullets by strategic relevance to the target (who would actually appear "
-            "on the same shortlist for a buyer).\n\n"
+            "on the same shortlist for a buyer).\n"
+            "- Total 3–7 bullets; each comparison must fit on a single line (~20 words) with one citation.\n\n"
             "Content to cover where supported by evidence:\n"
             "- Named direct competitors and how they differ on product surface area, target segment, geography, "
             "and business model.\n"
@@ -227,7 +238,8 @@ COMPANY_SECTION_SPECS = [
             "- Each bullet should start with a bold ISO date (YYYY-MM-DD) if available, "
             "then a short label and description, e.g.:\n"
             "  '- **2025-07-23 – Strategic partnership (funding/tech):** … [S15]'\n"
-            "- Every bullet must include at least one [S<ID>] citation.\n\n"
+            "- Every bullet must include at least one [S<ID>] citation.\n"
+            "- Cap to 6–8 bullets covering the last ~24 months unless a 9th is critical.\n\n"
             "Include product launches, funding, major partnerships, regulatory events, leadership changes, "
             "layoffs, M&A, and other material milestones. If dates are only given as month/year or year, use the "
             "best available granularity and state that explicitly."
@@ -237,43 +249,66 @@ COMPANY_SECTION_SPECS = [
 
 PERSON_SECTION_SPECS = [
     (
-        "person_summary",
+        "education",
         (
-            "Produce a high-density summary of the individual as an operator or investor.\n\n"
-            "- Focus on current role(s), domain expertise, and what they are known for.\n"
-            "- Summarise track record (companies started, roles held, major exits).\n"
-            "- Highlight sectors, stages, or geographies they focus on.\n"
-            "- Every factual claim must end with one or more [S<ID>] citations.\n"
-            "- Be explicit: this brief is about a person, not a company. Do not attribute company stats (revenue, headcount) "
-            "to the person unless they are the primary owner."
+            "Document formal education and credential history.\n\n"
+            "Formatting rules:\n"
+            "- Bullet list only; begin each bullet with a bold degree or credential label, e.g. '- **MSc, MIT (2016):** AI & robotics thesis. [S4]'.\n"
+            "- Order from most recent credential to oldest.\n"
+            "- Keep each bullet within ~18–20 words and cite every item.\n"
+            "- If no education data exists, include a single bullet stating 'Not disclosed in available sources.'\n\n"
+            "Content boundaries:\n"
+            "- Degrees, fields of study, graduation years, honors, certifications, licenses, professional memberships, fellowships.\n"
+            "- Distinguish in-progress programs by marking them '(in progress)'.\n"
+            "- Do NOT mention employers, job duties, or media appearances here—those belong to later sections."
         ),
     ),
     (
-        "career_history",
+        "work_history",
         (
-            "Summarise the person's career timeline with emphasis on high-signal roles.\n\n"
-            "- Use reverse-chronological bullets: Role, company, years, and key responsibilities.\n"
-            "- Prefer primary sources and PDL enrichment; cite each bullet.\n"
-            "- If dates are approximate, state that.\n"
-            "- Highlight any board seats or advisory roles if distinct from operational roles."
+            "Summarise professional roles in reverse chronological order without duplicating the education section.\n\n"
+            "Formatting rules:\n"
+            "- Bullet-only, one line per role, e.g. '- **CEO – Serendipity (2022–present):** Grew ARR to $50M. [S3]'.\n"
+            "- Include title, organisation, timeframe (YYYY–YYYY or 'Present'), and one concrete accomplishment or scope metric.\n"
+            "- Limit to the most recent 6–8 roles; agglomerate older roles into a single 'Earlier roles' bullet if needed.\n"
+            "- Cite every bullet; if timing is approximate, state that explicitly.\n"
+            "- Never repeat degrees, certifications, or news items already covered elsewhere.\n\n"
+            "Content inclusion:\n"
+            "- Operating roles, founding history, investing mandates, board seats, advisory positions, notable exits.\n"
+            "- Flag concurrent positions or part-time engagements where visible.\n"
+            "- If no roles are disclosed, state that plainly."
         ),
     ),
     (
-        "education_and_credentials",
+        "recent_news",
         (
-            "Summarise degrees, institutions, and other credentials (e.g. professional memberships).\n\n"
-            "- One bullet per major degree or credential, with dates if visible.\n"
-            "- Include any academic awards or publications if mentioned in sources."
+            "Highlight notable coverage about the person from roughly the last 24 months.\n\n"
+            "Formatting rules:\n"
+            "- Reverse-chronological bullets starting with a bold ISO date and short label, e.g. '- **2024-09-12 – Podcast interview:** Discussed AI safety. [S11]'.\n"
+            "- Keep bullets to single sentences (<= ~20 words) and cite every claim.\n"
+            "- Cap at 5–7 bullets; if nothing recent exists, state that explicitly.\n"
+            "- Focus on events centered on the individual (press interviews, awards, controversies, talks), not the company overall.\n"
+            "- Do not restate job history bullets; reference them only if the news item adds new facts."
         ),
     ),
     (
-        "recent_mentions",
+        "additional_information",
         (
-            "List important public mentions (press, blog posts, podcasts, talks) from roughly the last 5–10 years.\n\n"
-            "- Reverse-chronological bullets with bold dates and short descriptions.\n"
-            "- Focus on thought leadership, interviews, or significant news about companies they led at the time."
+            "Capture any remaining high-signal facts that do NOT fit into education, work history, or recent news.\n\n"
+            "Formatting rules:\n"
+            "- 3–5 concise bullets with bold labels and citations; skip this section if nothing new remains.\n"
+            "- Each bullet should introduce a unique fact (e.g. geographic focus, investment thesis, languages, philanthropic activity, patents, media preferences).\n"
+            "- Explicitly state 'No additional disclosures available.' when applicable.\n"
+            "- Never recycle bullets already present in earlier sections."
         ),
     ),
+]
+
+PERSON_SECTION_ORDER = [
+    "education",
+    "work_history",
+    "recent_news",
+    "additional_information",
 ]
 
 # --- Context management / token budgeting constants ---
@@ -284,7 +319,7 @@ NUMERIC_HEAVY_SECTIONS = {
     "recent_news",
     "technology",
     # Person-specific numeric sections
-    "career_history",
+    "work_history",
 }
 
 MAX_SOURCE_TOKENS = 6000
@@ -292,7 +327,27 @@ SNIPPET_SUMMARY_CHAR_THRESHOLD = 1500
 MAX_SNIPPET_SUMMARIES = 20
 MAX_SNIPPET_CHARS_FOR_SUMMARY = 8000
 MAX_DB_SNIPPET_CHARS = 16000
-MAX_SECTION_TOKENS = 5000
+MAX_SECTION_TOKENS = 16000
+DEFAULT_SECTION_TOKENS = 10000
+
+# Token budgets for reasoning models (gpt-5.1, o1, etc.) need to be much higher
+# because internal reasoning tokens are consumed BEFORE visible output is generated.
+# For non-reasoning models, these budgets are generous but still reasonable.
+SECTION_TOKEN_BUDGETS: dict[str, int] = {
+    # Company sections - increased significantly for reasoning model compatibility
+    "executive_summary": 10000,
+    "founding_details": 10000,
+    "founders_and_leadership": 10000,
+    "fundraising": 10000,
+    "product": 8000,
+    "technology": 10000,
+    "competitors": 10000,
+    "recent_news": 8000,
+    # Person sections
+    "education": 8000,
+    "work_history": 10000,
+    "additional_information": 8000,
+}
 
 # -----------------------------------------------------------------------------
 # Section → provider/domain policy
@@ -328,18 +383,14 @@ SECTION_SOURCE_POLICY: dict[str, dict[str, Any]] = {
         "recent_only": True,  # uses published_date filter
     },
     # --- Person Sections ---
-    "person_summary": {
+    "education": {
         "allowed_providers": {"pdl", "openai-web", "exa", "apollo"},
     },
-    "career_history": {
+    "work_history": {
         "allowed_providers": {"pdl", "openai-web", "exa", "apollo"},
     },
-    "education_and_credentials": {
+    "additional_information": {
         "allowed_providers": {"pdl", "openai-web", "exa", "apollo"},
-    },
-    "recent_mentions": {
-        "allowed_providers": {"exa", "openai-web"},
-        "recent_only": False, # wider window for person history
     },
 }
 
@@ -725,33 +776,84 @@ class Writer:
         recent: list[Source] = []
         undated: list[Source] = []
 
+        def _parse_date(raw: str) -> datetime.date | None:
+            """
+            Attempt to parse a broad range of date formats before giving up.
+            """
+            raw = raw.strip()
+            if not raw:
+                return None
+
+            # Normalise separators and pad components where possible
+            normalized = raw.replace("/", "-")
+            parts = normalized.split("-")
+            if len(parts) >= 3:
+                try:
+                    year = int(parts[0])
+                    month = int(parts[1])
+                    day = int(parts[2][:2])
+                    normalized = f"{year:04d}-{month:02d}-{day:02d}"
+                except ValueError:
+                    pass
+
+            for fmt in ("%Y-%m-%d", "%Y-%m", "%Y/%m/%d", "%Y/%m", "%d %b %Y", "%b %d %Y"):
+                try:
+                    dt = datetime.strptime(normalized[:10], fmt)
+                    if fmt in {"%Y-%m", "%Y/%m"}:
+                        # Assume first day of month when only year-month is provided
+                        dt = dt.replace(day=1)
+                    return dt.date()
+                except Exception:
+                    continue
+
+            # Last resort: try dateutil if available
+            try:
+                from dateutil import parser as dateutil_parser  # type: ignore
+
+                return dateutil_parser.parse(raw).date()
+            except Exception:
+                return None
+
         for s in sources:
             raw = (s.published_date or "").strip() if hasattr(s, "published_date") else ""
             if not raw:
                 undated.append(s)
                 continue
 
-            # Exa typically returns ISO timestamps; be defensive and just use YYYY-MM-DD
-            date_str = raw[:10]
-            try:
-                d = datetime.strptime(date_str, "%Y-%m-%d").date()
-            except Exception:
+            parsed = _parse_date(raw)
+            if not parsed:
                 undated.append(s)
                 continue
 
-            if d >= cutoff:
+            if parsed >= cutoff:
                 recent.append(s)
 
         if recent:
-            # Add a few high-signal undated sources (e.g. official press pages without metadata)
-            # to avoid missing key context just because the date parser failed.
+            # Reward trusted undated sources (OpenAI agentic news) with a larger cap
             undated_sorted = sorted(undated, key=self._source_sort_key)
-            # Append top 3 undated sources to the recent list
-            recent.extend(undated_sorted[:3])
+            extra: list[Source] = []
+            for src in undated_sorted:
+                provider = self._normalise_provider(src.provider)
+                if provider in {"openai-web", "openai_web"}:
+                    extra.append(src)
+                elif len(extra) < 10:
+                    extra.append(src)
+                if len(extra) >= 10:
+                    break
+            recent.extend(extra)
+            logger.info(
+                "Recent news filter: %s total, %s recent, %s added undated",
+                len(sources),
+                len(recent),
+                len(extra),
+            )
             return recent
 
-        # If filtering kills everything, fall back to unfiltered sources to avoid empty sections
-        return recent or sources
+        logger.info(
+            "Recent news filter dropped all sources (%s); returning originals.",
+            len(sources),
+        )
+        return sources
 
     def _normalise_company_name(self, value: str | None) -> str:
         if not value:
@@ -946,10 +1048,7 @@ Output 3–6 short bullet points or a compact paragraph (max ~140 words).
             def _call_sync() -> str | None:
                 with limit_llm_concurrency():
                     extra_body = {}
-                    if "gpt-5.1" in settings.LLM_MODEL:
-                        extra_body["reasoning"] = {"effort": "low"}
-                        extra_body["text"] = {"verbosity": "low"}
-
+                    
                     resp = client.chat.completions.create(
                         model=settings.LLM_MODEL,
                         messages=[
@@ -957,7 +1056,7 @@ Output 3–6 short bullet points or a compact paragraph (max ~140 words).
                             {"role": "user", "content": user_prompt},
                         ],
                         temperature=0.2,
-                        max_tokens=1500,
+                        max_tokens=4000,  # Increased for reasoning model compatibility
                         extra_body=extra_body,
                     )
                 summary = (resp.choices[0].message.content or "").strip()
@@ -1136,6 +1235,9 @@ Output 3–6 short bullet points or a compact paragraph (max ~140 words).
               terminology such as 'EP3966938B1', '14-nm FinFET', 'Phase 2b', 'A$1.94m'.
             - Keep sentences compact. Remove marketing adjectives and fluff where they
               do not add factual content.
+            - Brevity: keep bullets terse (target 8–20 words per bullet). Prefer noun phrases.
+            - Avoid redundancy: do not restate within the same section.
+            - No preambles or concluding fluff; get straight to the facts.
             - Every factual sentence or bullet MUST include at least one [S<ID>] citation,
               especially when it contains numbers, dates, or strong claims.
             - When an important field has no evidence, say so explicitly (e.g.
@@ -1198,15 +1300,13 @@ Output 3–6 short bullet points or a compact paragraph (max ~140 words).
                 """
             )
 
+        budget = SECTION_TOKEN_BUDGETS.get(
+            section_name,
+            DEFAULT_SECTION_TOKENS,
+            )
+
         with limit_llm_concurrency():
             extra_body = {}
-            if "gpt-5.1" in settings.LLM_MODEL:
-                # Use higher reasoning effort for analysis-heavy sections.
-                if section_name in ["executive_summary", "technology", "competitors"]:
-                    extra_body["reasoning"] = {"effort": "medium"}
-                else:
-                    extra_body["reasoning"] = {"effort": "low"}
-                extra_body["text"] = {"verbosity": "low"}
 
             raw_response = client.chat.completions.with_raw_response.create(
                 model=settings.LLM_MODEL,
@@ -1215,7 +1315,7 @@ Output 3–6 short bullet points or a compact paragraph (max ~140 words).
                     {"role": "user", "content": user_prompt},
                 ],
                 temperature=0.25,
-                max_tokens=MAX_SECTION_TOKENS,
+                max_tokens=budget,
                 extra_body=extra_body,
             )
             try:
@@ -1370,9 +1470,6 @@ Output 3–6 short bullet points or a compact paragraph (max ~140 words).
 
         with limit_llm_concurrency():
             extra_body = {}
-            if "gpt-5.1" in settings.LLM_MODEL:
-                extra_body["reasoning"] = {"effort": "low"}
-                extra_body["text"] = {"verbosity": "low"}
 
             resp = client.chat.completions.create(
                 model=settings.LLM_MODEL,
@@ -1408,6 +1505,87 @@ Output 3–6 short bullet points or a compact paragraph (max ~140 words).
             allow_repair=False,
         )
         return safe_text
+
+    def _tighten_section_text(
+        self,
+        section_name: str,
+        section_instruction: str,
+        context_str: str,
+        sources_str: str,
+        text: str,
+    ) -> str:
+        """
+        Optional LLM pass to compress a drafted section without dropping citations.
+        """
+        if not text.strip():
+            return text
+
+        client = get_llm_client()
+        system_prompt = textwrap.dedent(
+            """
+            You are rewriting a research brief section to reduce wordiness.
+
+            Rules:
+            - Preserve every factual claim and [S<ID>] citation.
+            - Keep markdown/bullet structure identical; no new bullets, no removal of required fields.
+            - Trim filler phrases, redundant sentences, and duplicated facts.
+            - Prefer noun-phrase bullets capped at ~20 words.
+            - Do not add new information beyond what is already in the section.
+            - If clarity would suffer, leave the sentence untouched.
+            """
+        )
+
+        user_prompt = textwrap.dedent(
+            f"""
+            SECTION: {section_name}
+            ORIGINAL SECTION TEXT:
+            {text}
+
+            SECTION SPECIFICATION (for context):
+            {section_instruction}
+
+            STRUCTURED CONTEXT (JSON):
+            {context_str}
+
+            SOURCES:
+            {sources_str}
+
+            Return the tightened section text only.
+            """
+        )
+
+        budget = SECTION_TOKEN_BUDGETS.get(
+            section_name,
+            DEFAULT_SECTION_TOKENS,
+        )
+
+        with limit_llm_concurrency():
+            extra_body = {}
+            # if "gpt-5.1" in settings.LLM_MODEL:
+            #     extra_body["reasoning"] = {"effort": "low"}
+            #     extra_body["text"] = {"verbosity": "low"}
+
+            resp = client.chat.completions.create(
+                model=settings.LLM_MODEL,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.2,
+                max_tokens=budget,
+                extra_body=extra_body,
+            )
+
+        self._record_llm_usage(
+            provider="openrouter",
+            model=getattr(resp, "model", settings.LLM_MODEL),
+            kind=f"writer:{section_name}:tighten",
+            section=section_name,
+            usage=getattr(resp, "usage", None),
+        )
+
+        tightened = (resp.choices[0].message.content or "").strip()
+        return tightened or text
 
     def _build_sources_section(
         self,
@@ -1942,15 +2120,33 @@ Output 3–6 short bullet points or a compact paragraph (max ~140 words).
         # Track all source IDs used across sections for final citations
         all_used_source_ids: set[int] = set()
 
-        brief: dict[str, Any] = {}
+        drafted_sections: dict[str, Any] = {}
 
         # Select section specs based on target_type
-        if getattr(kg, "target_type", "company") == "person":
+        target_type = getattr(kg, "target_type", "company")
+        if target_type == "person":
             section_specs = PERSON_SECTION_SPECS
         else:
             section_specs = COMPANY_SECTION_SPECS
 
+        ordered_section_names = [name for name, _ in section_specs]
+        if target_type == "person":
+            ordered_section_names = [
+                name for name in PERSON_SECTION_ORDER if name in ordered_section_names
+            ] + [
+                name
+                for name in ordered_section_names
+                if name not in PERSON_SECTION_ORDER
+            ]
+        elif ordered_section_names:
+            if ordered_section_names[0] != "executive_summary":
+                ordered_section_names = ["executive_summary"] + [
+                    name for name in ordered_section_names
+                    if name != "executive_summary"
+                ]
+
         section_tasks: List[SectionTaskInput] = []
+        tighten_enabled = getattr(settings, "WRITER_TIGHTEN_PASS", False)
 
         for section_name, instruction in section_specs:
             # Filter sources based on section-level policy
@@ -1958,14 +2154,14 @@ Output 3–6 short bullet points or a compact paragraph (max ~140 words).
                 section_name, sources, kg
             )
 
-            # Apply time-based filtering for recent_news / recent_mentions section
-            if section_name in {"recent_news", "recent_mentions"}:
+            # Apply time-based filtering for recent_news sections
+            if section_name == "recent_news":
                 policy = SECTION_SOURCE_POLICY.get(section_name, {})
                 if policy.get("recent_only", False):
                     section_sources = self._filter_recent_news_sources(section_sources)
 
             if not section_sources:
-                brief[section_name] = "Not enough data found."
+                drafted_sections[section_name] = "Not enough data found."
                 continue
 
             # Build section-specific source context
@@ -1974,7 +2170,7 @@ Output 3–6 short bullet points or a compact paragraph (max ~140 words).
             sources_str, used_source_ids = self._build_source_list(section_sources)
 
             if not sources_str.strip():
-                brief[section_name] = "Not enough data found."
+                drafted_sections[section_name] = "Not enough data found."
                 continue
 
             # Trace start of preparation
@@ -2014,6 +2210,25 @@ Output 3–6 short bullet points or a compact paragraph (max ~140 words).
                 task.sources_str,
             )
 
+            should_tighten = tighten_enabled or task.section_name == "executive_summary"
+            if should_tighten:
+                tightened = self._tighten_section_text(
+                    task.section_name,
+                    task.instruction,
+                    context_str,
+                    task.sources_str,
+                    text,
+                )
+                text = self._hallucination_check(
+                    tightened,
+                    task.used_source_ids,
+                    task.section_name,
+                    task.instruction,
+                    context_str,
+                    task.sources_str,
+                    allow_repair=False,
+            )
+
             if task.is_numeric_heavy:
                 text = self._enforce_numeric_citation_coverage(
                     text,
@@ -2041,7 +2256,7 @@ Output 3–6 short bullet points or a compact paragraph (max ~140 words).
                 section_name = future_to_section[future]
                 try:
                     s_name, text, used_ids = future.result()
-                    brief[s_name] = text
+                    drafted_sections[s_name] = text
                     all_used_source_ids |= used_ids
 
                     trace_job_step(
@@ -2058,7 +2273,15 @@ Output 3–6 short bullet points or a compact paragraph (max ~140 words).
                         exc,
                         extra={"job_id": str(self.job_id)},
                     )
-                    brief[section_name] = "Error generating section."
+                    drafted_sections[section_name] = "Error generating section."
+
+        brief: OrderedDict[str, Any] = OrderedDict()
+        if not ordered_section_names:
+            # If for some reason no sections were scheduled, preserve whatever was drafted.
+            ordered_section_names = list(drafted_sections.keys())
+
+        for name in ordered_section_names:
+            brief[name] = drafted_sections.get(name, "Not enough data found.")
 
         # Build citations after all sections are processed
         all_citations = [
@@ -2073,5 +2296,6 @@ Output 3–6 short bullet points or a compact paragraph (max ~140 words).
         brief["used_citations"] = used_citations
         brief["all_citations"] = all_citations
         brief["citations"] = used_citations  # Backwards-compatible alias
+        brief["section_order"] = list(ordered_section_names)
 
         return brief

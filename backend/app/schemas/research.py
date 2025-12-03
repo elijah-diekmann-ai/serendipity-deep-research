@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, field_validator, model_validator, ConfigDict, constr
 
 from ..models.research_job import JobStatus
 
@@ -104,8 +104,7 @@ class ResearchJobOut(BaseModel):
     total_cost_usd: float | None = None
     llm_usage: dict | None = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ResearchTraceEventOut(BaseModel):
@@ -117,8 +116,7 @@ class ResearchTraceEventOut(BaseModel):
     detail: str | None = None
     meta: dict | None = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class BriefContent(BaseModel):
@@ -137,3 +135,17 @@ class BriefContent(BaseModel):
     # Backwards-compatible alias for used_citations
     citations: list[dict] = []
 
+
+class ResearchQARequest(BaseModel):
+    question: constr(min_length=1, max_length=4000)
+
+
+class ResearchQAOut(BaseModel):
+    id: int
+    job_id: UUID
+    question: str
+    answer_markdown: str
+    used_source_ids: list[int] | None = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)

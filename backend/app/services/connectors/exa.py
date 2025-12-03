@@ -149,18 +149,19 @@ class ExaConnector(BaseConnector):
 
         if include_domains:
             payload["includeDomains"] = include_domains
+        else:
+            # Only set excludeDomains if includeDomains is NOT set, as Exa disallows both.
+            if exclude_domains:
+                payload.setdefault("excludeDomains", []).extend(exclude_domains)
 
-        if exclude_domains:
-            payload.setdefault("excludeDomains", []).extend(exclude_domains)
+                # Never use Exa's own marketing site as "evidence" about the target company
+                # unless explicitly requested.
+                payload.setdefault("excludeDomains", []).append("exa.ai")
 
         if start_published_date:
             payload["startPublishedDate"] = start_published_date
         if end_published_date:
             payload["endPublishedDate"] = end_published_date
-
-        # Never use Exa's own marketing site as "evidence" about the target company
-        # unless explicitly requested.
-        payload.setdefault("excludeDomains", []).append("exa.ai")
 
         return payload
 

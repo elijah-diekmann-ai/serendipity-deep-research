@@ -28,6 +28,77 @@ NON_CANONICAL_DOMAINS = {
     "ycombinator.com", "www.ycombinator.com",
 }
 
+ROLE_PRIORITY_BUCKETS: list[tuple[int, tuple[str, ...]]] = [
+    (
+        0,
+        (
+            "founder",
+            "co-founder",
+            "cofounder",
+        ),
+    ),
+    (
+        1,
+        (
+            "chief executive",
+            "ceo",
+            "co-ceo",
+            "managing partner",
+            "managing director",
+            "general partner",
+        ),
+    ),
+    (
+        2,
+        (
+            "chief operating",
+            "coo",
+            "chief technology",
+            "cto",
+            "chief product",
+            "cpo",
+            "chief revenue",
+            "cro",
+            "chief commercial",
+            "chief financial",
+            "cfo",
+            "chief marketing",
+            "cmo",
+            "president",
+        ),
+    ),
+    (
+        3,
+        (
+            "vice president",
+            "vp ",
+            "svp",
+            "evp",
+            "head of",
+            "executive director",
+        ),
+    ),
+    (
+        4,
+        (
+            "chair",
+            "chairman",
+            "chairwoman",
+            "board",
+            "non-executive",
+            "director",
+        ),
+    ),
+    (
+        5,
+        (
+            "secretary",
+            "treasurer",
+            "officer",
+        ),
+    ),
+]
+
 def _normalize_name(s: str) -> str:
     """
     Simplify company name for comparison (remove legal suffixes, lowercase).
@@ -88,6 +159,52 @@ def _simple_similarity(name: str, domain: str) -> float:
         return 0.5 + (0.5 * (match_count / len(name_tokens)))
         
     return 0.0
+
+
+def _role_priority(role: str) -> int:
+    """
+    Determine the importance of a role/title (lower is higher priority).
+    """
+    role_lower = role.lower()
+    for rank, keywords in ROLE_PRIORITY_BUCKETS:
+        if any(keyword in role_lower for keyword in keywords):
+            return rank
+    return 50
+
+
+def _normalize_roles(roles: List[str]) -> List[str]:
+    """
+    De-duplicate and sort roles so founders / key management appear first.
+    """
+    seen: set[str] = set()
+    deduped: List[tuple[str, int]] = []
+    for idx, role in enumerate(roles):
+        if not role:
+            continue
+        key = role.strip().lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append((role, idx))
+
+    deduped.sort(key=lambda item: (_role_priority(item[0]), item[1]))
+    return [role for role, _ in deduped]
+
+
+def _person_role_rank(person: "PersonNode") -> int:
+    if person.roles:
+        return min(_role_priority(r) for r in person.roles)
+    # Keep Apollo/PDL entities ahead of generic officers when roles missing
+    if person.identity_source in {"apollo", "pdl"}:
+        return 10
+    return 60
+
+
+def _sort_people_by_role(people: List["PersonNode"]) -> None:
+    """
+    Sort people in-place so founders / executives precede board-only entries.
+    """
+    people.sort(key=lambda p: (_person_role_rank(p), p.full_name.lower()))
 
 
 def _normalize_country(value: Optional[str]) -> Optional[str]:
@@ -425,7 +542,9 @@ def _merge_person(existing: PersonNode, new: PersonNode) -> PersonNode:
     - Merge enrichment dicts provider-wise.
     - If PDL enrichment is present, set enrichment_source="pdl".
     """
-    existing.roles = sorted({*existing.roles, *new.roles})
+    combined_roles = list(existing.roles)
+    combined_roles.extend(r for r in new.roles if r)
+    existing.roles = _normalize_roles(combined_roles)
 
     # Prefer Apollo as the identity layer when available.
     if new.identity_source == "apollo" and existing.identity_source != "apollo":
@@ -1099,6 +1218,7 @@ def resolve_entities(raw_results: dict, target_input: Optional[dict] = None) -> 
     # Optionally enrich via People Data Labs (biography layer)
     # Only enriches Apollo-discovered people who don't already have PDL data
     _enrich_with_pdl(people_nodes, company_name, domain)
+    _sort_people_by_role(people_nodes)
 
     company_node.people = people_nodes
 

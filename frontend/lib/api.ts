@@ -9,3 +9,24 @@ export const api = axios.create({
   },
 });
 
+export type JobQAPair = {
+  id: number;
+  job_id: string;
+  question: string;
+  answer_markdown: string;
+  used_source_ids?: number[] | null;
+  created_at: string;
+};
+
+export async function fetchJobQA(jobId: string): Promise<JobQAPair[]> {
+  const resp = await api.get<JobQAPair[]>(`/research/${jobId}/qa`);
+  return resp.data;
+}
+
+export async function askJobQuestion(
+  jobId: string,
+  question: string
+): Promise<JobQAPair> {
+  const resp = await api.post<JobQAPair>(`/research/${jobId}/qa`, { question });
+  return resp.data;
+}

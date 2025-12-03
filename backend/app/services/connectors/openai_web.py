@@ -8,6 +8,7 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
+import hashlib
 
 from .base import BaseConnector, ConnectorResult
 from ..caching import cached_get
@@ -737,6 +738,12 @@ class OpenAIWebSearchConnector(BaseConnector):
             cache_key_parts.append(f"name:{company_name.lower()}")
         if website:
             cache_key_parts.append(f"site:{website.lower()}")
+        person_name_param = str(params.get("person_name") or "").strip()
+        if mode == "person" and person_name_param:
+            cache_key_parts.append(f"person:{person_name_param.lower()}")
+        if context:
+            context_hash = hashlib.sha256(context.encode("utf-8")).hexdigest()[:12]
+            cache_key_parts.append(f"ctx:{context_hash}")
         cache_key = "|".join(cache_key_parts)
 
         cached = await cached_get(cache_key)

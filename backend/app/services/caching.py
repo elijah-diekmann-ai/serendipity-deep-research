@@ -1,17 +1,25 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Optional
+from typing import Any
 
-import redis.asyncio as redis
+import redis
 from ..core.config import get_settings
 
-# Initialize settings to get REDIS_URL
 settings = get_settings()
 
-# Initialize Redis client
-# decode_responses=True ensures we get str back, not bytes
-_redis = redis.from_url(str(settings.REDIS_URL), decode_responses=True)
+
+def _get_sync_redis() -> redis.Redis:
+    """
+    Create a fresh sync Redis client per call so Celery workers
+    don't hold onto closed event loops.
+    """
+    return redis.from_url(
+        str(settings.REDIS_URL),
+        decode_responses=True,
+        socket_timeout=5,
+        socket_connect_timeout=5,
+    )
 
 
 async def cached_get(
@@ -30,10 +38,11 @@ async def cached_get(
     - On read: returns cached value (deserialized JSON) or None if missing/expired.
     - On write: stores value (serialized JSON) with optional TTL and returns it.
     """
+    client = _get_sync_redis()
     try:
         if set_value is None:
             # Read path
-            val = await _redis.get(key)
+            val = client.get(key)
             if val is not None:
                 return json.loads(val)
             return None
@@ -41,11 +50,15 @@ async def cached_get(
         # Write path
         serialized = json.dumps(set_value)
         if ttl is not None:
-            await _redis.set(key, serialized, ex=ttl)
+            client.set(key, serialized, ex=ttl)
         else:
-            await _redis.set(key, serialized)
+            client.set(key, serialized)
         return set_value
 
     except redis.RedisError:
-        # If Redis fails, we treat it as a cache miss or write failure
         return None
+    finally:
+        try:
+            client.close()
+        except Exception:
+            pass

@@ -6,10 +6,19 @@ from fastapi.security.api_key import APIKeyHeader
 from sqlalchemy.orm import Session
 
 from ..core.db import get_db
-from ..schemas.research import ResearchRequest, ResearchJobOut, ResearchTraceEventOut
+from ..schemas.research import (
+    ResearchRequest,
+    ResearchJobOut,
+    ResearchTraceEventOut,
+    ResearchQARequest,
+    ResearchQAOut,
+)
 from ..models.research_job import ResearchJob, JobStatus
 from ..models.brief import Brief
 from ..models.research_trace_event import ResearchTraceEvent
+from ..models.research_qa import ResearchQA
+from ..models.source import Source
+from ..services.qa import answer_research_question
 from ..core.celery_app import celery_app
 from ..core.config import get_settings
 
@@ -118,3 +127,69 @@ def get_research_job(
         "brief": brief_content,
         "trace": [ResearchTraceEventOut.model_validate(e).model_dump() for e in trace_events],
     }
+
+
+@router.post("/research/{job_id}/qa", response_model=ResearchQAOut, status_code=201)
+def create_research_qa(
+    job_id: UUID,
+    payload: ResearchQARequest,
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_api_key),
+):
+    job = db.query(ResearchJob).filter(ResearchJob.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.status != JobStatus.COMPLETED:
+        raise HTTPException(
+            status_code=400,
+            detail="Q&A is only available once the research job has completed.",
+        )
+
+    has_sources = db.query(Source.id).filter(Source.job_id == job.id).first()
+    if not has_sources:
+        raise HTTPException(
+            status_code=400,
+            detail="No sources were captured for this job; cannot answer questions.",
+        )
+
+    request_id = str(uuid4())
+
+    try:
+        qa_row = answer_research_question(
+            db=db,
+            job=job,
+            question=payload.question,
+            request_id=request_id,
+        )
+    except ValueError as e:
+        # For predictable validation errors in the service
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception(
+            "Q&A failed for job %s: %s", job_id, e,
+            extra={"job_id": str(job_id), "request_id": request_id},
+        )
+        raise HTTPException(status_code=500, detail="Failed to answer question")
+
+    return ResearchQAOut.model_validate(qa_row)
+
+
+@router.get("/research/{job_id}/qa", response_model=list[ResearchQAOut])
+def list_research_qa(
+    job_id: UUID,
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_api_key),
+):
+    job = db.query(ResearchJob).filter(ResearchJob.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    rows = (
+        db.query(ResearchQA)
+        .filter(ResearchQA.job_id == job_id)
+        .order_by(ResearchQA.created_at.asc(), ResearchQA.id.asc())
+        .all()
+    )
+
+    return [ResearchQAOut.model_validate(row) for row in rows]

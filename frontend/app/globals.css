@@ -30,6 +30,76 @@
   --lg-hover-glow: rgba(255, 255, 255, 0.4);
   --lg-red: #fb4268;
   --lg-grey: #5b5b5b;
+
+  /* Q&A Drawer Variables */
+  --qa-drawer-width: clamp(340px, 36vw, 520px);
+  --qa-drawer-gutter: 0px; /* dynamic */
+}
+
+@media (min-width: 1280px) {
+  body.qa-drawer-open { --qa-drawer-gutter: calc(var(--qa-drawer-width) + 24px); }
+}
+
+.content-safe-right {
+  padding-right: var(--qa-drawer-gutter);
+  transition: padding-right 280ms ease;
+}
+
+/* --- Q&A DRAWER --- */
+
+.qa-scrim {
+  position: fixed; inset: 0; background: rgba(15,16,32,0.28);
+  opacity: 0; pointer-events: none; transition: opacity 220ms ease;
+  z-index: 60;
+}
+.qa-scrim--open { opacity: 1; pointer-events: auto; }
+
+.qa-drawer {
+  position: fixed; top: 0; right: 0; height: 100vh; width: var(--qa-drawer-width);
+  transform: translateX(100%); transition: transform 320ms cubic-bezier(0.2,0.8,0.2,1);
+  z-index: 61; display: flex; flex-direction: column;
+}
+.qa-drawer--open { transform: translateX(0); }
+
+/* Liquid Glass: reuse light glass tokens, add subtle specular */
+.qa-drawer .qa-glass {
+  position: relative; flex: 1 1 auto; display: flex; flex-direction: column;
+  background: rgba(255,255,255,0.65);
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  box-shadow: 0 10px 30px rgba(0,0,0,0.12);
+}
+.qa-drawer .qa-glass::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  box-shadow: inset 1px 1px 0 rgba(255,255,255,0.75), inset 0 0 5px rgba(255,255,255,0.75);
+}
+
+/* Floating button */
+.qa-fab {
+  position: fixed; right: 1.5rem; bottom: 1.5rem; z-index: 62;
+  border-radius: 9999px; padding: 0.6rem 0.9rem; backdrop-filter: blur(16px) saturate(140%);
+  background: rgba(255,255,255,0.65); border: 1px solid rgba(255,255,255,0.6);
+  box-shadow: 0 8px 20px rgba(0,0,0,0.18);
+}
+@media (min-width: 768px) { .qa-fab { right: 2rem; bottom: 2rem; } }
+
+/* Chat bubbles */
+.bubble {
+  max-width: 88%; padding: 0.5rem 0.75rem; border-radius: 16px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+}
+.bubble--user { margin-left: auto; background: rgba(59,130,246,0.12); }
+.bubble--assistant { margin-right: auto; background: rgba(0,0,0,0.04); }
+
+/* Mobile behavior: drawer takes full width */
+@media (max-width: 1279px) {
+  .qa-drawer { width: 100vw; }
+  body.qa-drawer-open { --qa-drawer-gutter: 0px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .qa-drawer { transition: none; }
+  .qa-scrim { transition: none; }
+  .content-safe-right { transition: none; }
 }
 
 .bg-horizon-light {

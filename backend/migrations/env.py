@@ -17,6 +17,7 @@ from app.models.research_job import ResearchJob
 from app.models.source import Source
 from app.models.brief import Brief
 from app.models.research_trace_event import ResearchTraceEvent
+from app.models.research_qa import ResearchQA
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
