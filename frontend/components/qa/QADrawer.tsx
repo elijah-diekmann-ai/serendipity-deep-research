@@ -131,9 +131,14 @@ export function QADrawer({
             onScroll={handleScroll}
           >
             {history.length === 0 && !loading && (
-              <div className="h-full flex flex-col items-center justify-center text-center text-gray-500 px-6 opacity-60">
-                <svg className="w-12 h-12 mb-3 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5"><path d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                <p className="text-sm">Ask questions about the brief, sources, or specific details.</p>
+              <div className="h-full flex flex-col items-center justify-center text-center text-gray-500 px-6">
+                <div className="w-10 h-10 mb-4 rounded-full bg-gradient-to-br from-blue-500/20 to-indigo-500/20 flex items-center justify-center">
+                  <svg className="w-5 h-5 text-blue-600" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456Z" />
+                  </svg>
+                </div>
+                <p className="text-sm font-medium text-gray-700 mb-1">Query knowledge graph</p>
+                <p className="text-xs text-gray-400">Ask about the brief, sources, or specific details.</p>
               </div>
             )}
 
@@ -193,14 +198,14 @@ export function QADrawer({
               <button
                 type="submit"
                 disabled={!input.trim() || loading || !qaEnabled}
-                className="absolute right-2 bottom-2 p-1.5 rounded-lg text-white bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+                className="absolute right-2 bottom-3 p-1.5 rounded-lg text-white bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
                 title="Send"
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M22 2 11 13"/><path d="m22 2-7 20-4-9-9-4 20-7z"/></svg>
               </button>
             </form>
             <div className="mt-2 text-[10px] text-gray-400 text-center">
-              Answers are generated from the sources collected in this research run.
+              Responses will draw from sources in the knowledge graph for this research run.
             </div>
           </div>
         </div>

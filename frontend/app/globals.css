@@ -282,6 +282,111 @@ body.theme-light {
   );
 }
 
+/* ========== THINKING INDICATOR ========== */
+
+/* Three-dot typing indicator */
+.thinking-dots {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.thinking-dots span {
+  width: 6px;
+  height: 6px;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  border-radius: 50%;
+  animation: thinkingBounce 1.4s ease-in-out infinite;
+}
+
+.thinking-dots span:nth-child(1) { animation-delay: 0s; }
+.thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
+.thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes thinkingBounce {
+  0%, 60%, 100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+  30% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
+}
+
+/* Gradient orb */
+.thinking-orb {
+  position: relative;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #4D6BFF 0%, #6B8AFF 50%, #8BA8FF 100%);
+  animation: orbPulse 2s ease-in-out infinite;
+  box-shadow: 
+    0 0 12px rgba(77, 107, 255, 0.5),
+    0 0 24px rgba(77, 107, 255, 0.25);
+}
+
+.thinking-orb::before {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, transparent 0%, rgba(255,255,255,0.4) 50%, transparent 100%);
+  animation: orbShine 2s ease-in-out infinite;
+}
+
+@keyframes orbPulse {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 
+      0 0 12px rgba(77, 107, 255, 0.5),
+      0 0 24px rgba(77, 107, 255, 0.25);
+  }
+  50% {
+    transform: scale(1.1);
+    box-shadow: 
+      0 0 16px rgba(77, 107, 255, 0.6),
+      0 0 32px rgba(77, 107, 255, 0.35);
+  }
+}
+
+@keyframes orbShine {
+  0%, 100% { opacity: 0.3; transform: rotate(0deg); }
+  50% { opacity: 0.5; transform: rotate(180deg); }
+}
+
+/* Shimmer bar indicator */
+.thinking-shimmer {
+  position: relative;
+  width: 48px;
+  height: 6px;
+  background: rgba(99, 102, 241, 0.2);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.thinking-shimmer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(99, 102, 241, 0.6),
+    transparent
+  );
+  animation: shimmerSlide 1.5s ease-in-out infinite;
+}
+
+@keyframes shimmerSlide {
+  0% { left: -100%; }
+  100% { left: 100%; }
+}
+
 .source-entry:target {
   background-color: rgba(59, 130, 246, 0.1);
   box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.2);

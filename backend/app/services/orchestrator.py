@@ -165,7 +165,7 @@ def run_research_job(self, job_id: str):
             phase="PLANNING",
             step="plan_research:start",
             label="Planning research strategy",
-            detail="Designing deterministic Exa-first plan for this target.",
+            detail="Constructing query plan: Exa neural search, OpenAI agentic search, People Data Labs enrichment.",
         )
         plan = plan_research(target_input)
         trace_job_step(
@@ -173,7 +173,7 @@ def run_research_job(self, job_id: str):
             phase="PLANNING",
             step="plan_research:done",
             label="Research plan created",
-            detail=f"{len(plan)} steps scheduled across connectors.",
+            detail=f"Research graph with {len(plan)} retrieval steps constructed.",
             meta={"steps": [s["name"] for s in plan]},
         )
         logger.info(
@@ -190,16 +190,16 @@ def run_research_job(self, job_id: str):
             job.id,
             phase="COLLECTION",
             step="connectors:start",
-            label="Collecting sources from the web and registries",
-            detail="Running connector plan (Exa + registries) in parallel.",
+            label="Collecting sources from web and data providers",
+            detail="Executing Exa crawls, OpenAI searches, and PDL lookups in parallel.",
         )
-        raw_results = connectors.execute_plan(plan, target_input)
+        raw_results = connectors.execute_plan(plan, target_input, job_id=job.id)
         trace_job_step(
             job.id,
             phase="COLLECTION",
             step="connectors:done",
             label="Finished collecting raw sources",
-            detail="Connectors returned snippets for entity resolution.",
+            detail="Raw evidence collected; preparing for knowledge graph construction.",
             meta={"steps_with_results": [k for k, v in (raw_results or {}).items() if v]},
         )
         logger.info(
@@ -250,7 +250,7 @@ def run_research_job(self, job_id: str):
             phase="ENTITY_RESOLUTION",
             step="resolve_entities:start",
             label="Normalising entities into a knowledge graph",
-            detail="Resolving company, domain, and people from raw connector outputs.",
+            detail="Fusing multi-source evidence into unified knowledge graph.",
         )
         kg = resolve_entities(raw_results, target_input)
 
@@ -259,7 +259,7 @@ def run_research_job(self, job_id: str):
             phase="ENTITY_RESOLUTION",
             step="resolve_entities:done",
             label="Knowledge graph built",
-            detail="Resolved company profile, domain, and leadership set.",
+            detail="Knowledge graph constructed with entity linking and deduplication.",
             meta={
                 "company_name": kg.company.name,
                 "domain": kg.company.domain,
@@ -277,7 +277,7 @@ def run_research_job(self, job_id: str):
             phase="WRITING",
             step="writer:start",
             label="Drafting investment brief",
-            detail="Compressing sources and drafting sections with the LLM.",
+            detail="Synthesizing knowledge graph into structured investment brief.",
         )
         writer = Writer(
             db=db,
@@ -292,7 +292,7 @@ def run_research_job(self, job_id: str):
             phase="WRITING",
             step="writer:done",
             label="Brief drafted",
-            detail="All sections generated; persisting to storage.",
+            detail="Evidence synthesis complete; brief persisted.",
         )
 
         brief = Brief(job_id=job.id, content_json=brief_json)
@@ -313,7 +313,7 @@ def run_research_job(self, job_id: str):
             phase="DONE",
             step="job:completed",
             label="Research job completed",
-            detail="Brief is ready to view.",
+            detail="Research complete. Brief ready for review.",
         )
         if total_cost_value is not None:
             trace_job_step(

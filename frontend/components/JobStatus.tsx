@@ -315,7 +315,7 @@ export default function JobStatus({ jobId }: { jobId: string }) {
                     : "bg-blue-50 text-blue-700 border-blue-200"
                 }`}
               >
-                {job.status}
+                {job.status === "PROCESSING" ? "Researching" : job.status}
               </div>
 
               {(companyName || domain) && (
@@ -332,8 +332,7 @@ export default function JobStatus({ jobId }: { jobId: string }) {
 
               {job.status !== "COMPLETED" && job.status !== "FAILED" && (
                 <p className="mt-4 text-xs text-gray-600">
-                  We&apos;re collecting sources and drafting your brief. The full write-up
-                  will appear below as soon as it&apos;s ready.
+                  Agents working. Your brief will be ready shortly.
                 </p>
               )}
 
@@ -382,17 +381,10 @@ export default function JobStatus({ jobId }: { jobId: string }) {
             </div>
 
             <div className="flex flex-col items-end space-y-2">
-              {/* Pulse and stuck indicator */}
-              {job.status !== "COMPLETED" && job.status !== "FAILED" && (
-                <div className="flex flex-col items-end space-y-1 text-sm text-gray-600 mb-2">
-                  <div className="flex items-center space-x-2 animate-pulse">
-                    <div className="w-2 h-2 bg-blue-600 rounded-full"></div>
-                  </div>
-                  {isStuck && (
-                    <div className="mt-1 text-xs text-orange-600 bg-orange-50 border border-orange-200 rounded px-2 py-1">
-                      Taking longer than usual...
-                    </div>
-                  )}
+              {/* Stuck indicator */}
+              {job.status !== "COMPLETED" && job.status !== "FAILED" && isStuck && (
+                <div className="mb-2 text-xs text-orange-600 bg-orange-50 border border-orange-200 rounded px-2 py-1">
+                  Taking longer than usual...
                 </div>
               )}
 
@@ -402,6 +394,9 @@ export default function JobStatus({ jobId }: { jobId: string }) {
                   onClick={() => setShowSystemThoughts((prev) => !prev)}
                   className="group flex items-center gap-2 px-3 py-1.5 rounded-md bg-black/5 hover:bg-black/10 transition-all text-[11px] uppercase tracking-wider font-medium text-gray-500 hover:text-gray-900"
                 >
+                  {job.status !== "COMPLETED" && job.status !== "FAILED" && (
+                    <div className="thinking-orb" style={{width: 12, height: 12}}></div>
+                  )}
                   <span>SYSTEM THOUGHTS</span>
                   <svg
                     width="10"
