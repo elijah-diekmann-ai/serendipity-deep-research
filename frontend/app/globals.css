@@ -84,12 +84,24 @@
 @media (min-width: 768px) { .qa-fab { right: 2rem; bottom: 2rem; } }
 
 /* Chat bubbles */
+/* Chat bubbles - liquid glass style */
 .bubble {
-  max-width: 88%; padding: 0.5rem 0.75rem; border-radius: 16px;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+  max-width: 92%;
+  padding: 0.75rem 1rem;
+  border-radius: 14px;
 }
-.bubble--user { margin-left: auto; background: rgba(59,130,246,0.12); }
-.bubble--assistant { margin-right: auto; background: rgba(0,0,0,0.04); }
+.bubble--user {
+  margin-left: auto;
+  background: linear-gradient(135deg, rgba(59,130,246,0.15) 0%, rgba(99,102,241,0.1) 100%);
+  border: 1px solid rgba(59,130,246,0.1);
+}
+.bubble--assistant {
+  margin-right: auto;
+  background: linear-gradient(135deg, rgba(255,255,255,0.7) 0%, rgba(255,255,255,0.4) 100%);
+  border: 1px solid rgba(255,255,255,0.5);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+}
 
 /* Mobile behavior: drawer takes full width */
 @media (max-width: 1279px) {

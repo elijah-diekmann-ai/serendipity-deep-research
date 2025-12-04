@@ -30,3 +30,26 @@ export async function askJobQuestion(
   const resp = await api.post<JobQAPair>(`/research/${jobId}/qa`, { question });
   return resp.data;
 }
+
+export type ArchiveJob = {
+  job: {
+    id: string;
+    status: string;
+    created_at: string;
+    completed_at: string | null;
+    target_input: {
+      target_type?: string;
+      company_name?: string;
+      person_name?: string;
+      context?: string;
+    };
+  };
+  has_brief: boolean;
+};
+
+export async function fetchArchive(limit = 50, offset = 0): Promise<ArchiveJob[]> {
+  const resp = await api.get<ArchiveJob[]>(`/archive`, {
+    params: { limit, offset },
+  });
+  return resp.data;
+}

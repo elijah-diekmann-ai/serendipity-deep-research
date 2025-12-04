@@ -10,8 +10,7 @@ import {
   Citation,
   buildCitationIndexMap,
 } from "../lib/citations";
-import { QADrawer } from "./qa/QADrawer";
-import { FloatingQAButton } from "./qa/FloatingQAButton";
+import { QAPanel } from "./qa/QAPanel";
 
 type LLMUsageTotals = {
   input?: number;
@@ -126,8 +125,6 @@ export default function JobStatus({ jobId }: { jobId: string }) {
   const [showAllCitations, setShowAllCitations] = useState(false);
   const [trace, setTrace] = useState<TraceEvent[]>([]);
   const [showSystemThoughts, setShowSystemThoughts] = useState(false);
-
-  const [qaOpen, setQaOpen] = useState(false);
 
   // NEW: auto-scroll behaviour (chat-style)
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(true);
@@ -280,21 +277,10 @@ export default function JobStatus({ jobId }: { jobId: string }) {
 
   return (
     <>
-      {!qaOpen && (
-        <FloatingQAButton
-          onClick={() => setQaOpen(true)}
-          disabled={!qaEnabled}
-          label="Query with AI"
-        />
-      )}
-      
-      <QADrawer
-        open={qaOpen}
-        onClose={() => setQaOpen(false)}
+      <QAPanel
         jobId={jobId}
         qaEnabled={qaEnabled}
         companyLabel={companyName || domain || "This target"}
-        domain={domain}
         allCitations={allCitations}
       />
 
@@ -397,7 +383,7 @@ export default function JobStatus({ jobId }: { jobId: string }) {
                   {job.status !== "COMPLETED" && job.status !== "FAILED" && (
                     <div className="thinking-orb" style={{width: 12, height: 12}}></div>
                   )}
-                  <span>SYSTEM THOUGHTS</span>
+                  <span>System Thoughts</span>
                   <svg
                     width="10"
                     height="6"
@@ -435,7 +421,7 @@ export default function JobStatus({ jobId }: { jobId: string }) {
                 className="border border-black/10 bg-black/5 rounded-lg p-3 text-xs text-gray-800 max-h-72 overflow-y-auto trace-scroll-shadow"
               >
                 <div className="font-mono text-[10px] text-gray-500 mb-2">
-                  SYSTEM THOUGHTS – high-level trace of the research pipeline
+                  System Thoughts – high-level trace of the AI research pipeline
                 </div>
 
                 {trace.length === 0 && (
