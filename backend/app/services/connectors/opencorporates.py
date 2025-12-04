@@ -77,10 +77,6 @@ class OpenCorporatesConnector(BaseConnector):
                 timeout=self.timeout,
             )
         except httpx.HTTPError:
-            # Network errors will be caught by tenacity if raised, but here we return None to retry logic
-            # Actually, tenacity wraps the public method. If we catch here, we might hide errors.
-            # Let's let tenacity handle connectivity issues at the fetch() level if possible,
-            # but for internal helpers we should just let exceptions bubble up or handle specific status codes.
             raise
 
         if resp.status_code == 404:
@@ -258,10 +254,6 @@ class OpenCorporatesConnector(BaseConnector):
                 )
                 
                 if search_hit:
-                    # Fetch full details using the search hit's coordinates
-                    # The search hit itself is a summary, but details endpoint has filings/officers.
-                    # Actually search results in OC often have basic info, but details endpoint is richer.
-                    # The plan suggests calling fetch_company after search.
                     company = await self._fetch_company(
                         client,
                         search_hit["jurisdiction_code"],
