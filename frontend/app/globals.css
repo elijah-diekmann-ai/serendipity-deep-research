@@ -4,9 +4,9 @@
 
 :root {
   /* The Deep Horizon Gradient */
-  --bg-deep: #0F1123; /* Slightly lighter, richer dark blue/charcoal instead of #020314 */
-  --bg-horizon: #3545A6;
-  --bg-gradient: linear-gradient(180deg, var(--bg-deep) 0%, var(--bg-horizon) 45%, var(--bg-horizon) 55%, var(--bg-deep) 100%);
+  --bg-deep: #4F64FF; /* Vivid blue-purple (Bottom) */
+  --bg-horizon: #E2E8FE; /* Very light periwinkle (Top) */
+  --bg-gradient: linear-gradient(180deg, var(--bg-horizon) 0%, var(--bg-horizon) 8%, var(--bg-deep) 55%);
 
   /* UI Elements */
   --glass-panel: rgba(255, 255, 255, 0.03);

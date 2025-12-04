@@ -48,9 +48,9 @@ export default function Layout({
         {rightSlot ?? (
           <Link
             href="/archive"
-            className="text-sm font-medium text-white/60 hover:text-white hover:underline uppercase tracking-widest transition-colors font-mono"
+            className="text-sm font-medium text-white/90 hover:text-white hover:underline tracking-wide transition-colors font-mono"
           >
-            VIEW ARCHIVE
+            View Archive
           </Link>
         )}
       </div>

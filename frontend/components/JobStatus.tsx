@@ -384,7 +384,7 @@ export default function JobStatus({ jobId }: { jobId: string }) {
               {/* Stuck indicator */}
               {job.status !== "COMPLETED" && job.status !== "FAILED" && isStuck && (
                 <div className="mb-2 text-xs text-orange-600 bg-orange-50 border border-orange-200 rounded px-2 py-1">
-                  Taking longer than usual...
+                      Taking longer than usual...
                 </div>
               )}
 
