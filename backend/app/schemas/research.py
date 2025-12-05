@@ -149,3 +149,71 @@ class ResearchQAOut(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# ---------------------------------------------------------------------------
+# Micro-Research Plan Schemas
+# ---------------------------------------------------------------------------
+
+class CostEstimate(BaseModel):
+    """Cost estimate for micro-research plan."""
+    label: str  # "small" | "moderate" | "large"
+
+
+class RuntimeEstimate(BaseModel):
+    """Runtime estimate for micro-research plan."""
+    label: str  # "short" | "medium" | "long"
+
+
+class ResearchPlanProposal(BaseModel):
+    """Micro-research plan proposal returned with Q&A response."""
+    plan_id: UUID
+    gap_statement: str
+    plan_markdown: str
+    estimated_cost: CostEstimate
+    estimated_runtime: RuntimeEstimate
+    action: str = "RUN_ADDITIONAL_RESEARCH"
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ResearchQAOutExtended(ResearchQAOut):
+    """Extended Q&A response with optional research plan."""
+    research_plan: ResearchPlanProposal | None = None
+
+
+class ResearchQAPlanOut(BaseModel):
+    """Full micro-research plan output."""
+    id: UUID
+    job_id: UUID
+    qa_id: int | None = None
+    question: str
+    gap_statement: str
+    intent: str | None = None
+    plan_markdown: str | None = None
+    status: str
+    created_at: datetime
+    confirmed_at: datetime | None = None
+    completed_at: datetime | None = None
+    error_message: str | None = None
+    created_source_ids: list[int] | None = None
+    result_qa_id: int | None = None
+    estimated_cost_label: str | None = None
+    total_cost_usd: float | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ---------------------------------------------------------------------------
+# Source Schemas (for live citation sync)
+# ---------------------------------------------------------------------------
+
+class SourceOut(BaseModel):
+    """Source output for citation syncing."""
+    id: int
+    url: str | None = None
+    title: str | None = None
+    provider: str
+    published_date: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)

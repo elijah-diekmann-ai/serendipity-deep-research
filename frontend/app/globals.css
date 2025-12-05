@@ -16,12 +16,13 @@
   --accent-glow: #4D6BFF;
   
   /* Lightest gradient color for research page background */
-  --bg-research-light: #E0E7FF; /* A very light indigo/white, approximating the lightest point of the gradient */
+  --bg-research-light: #FAF9F7; /* Warm off-white */
   
-  /* Inverted Light Gradient */
-  --bg-light-deep: #F8FAFC;      /* Very light gray/white */
-  --bg-light-horizon: #E0E7FF;   /* Light indigo */
-  --bg-gradient-light: linear-gradient(180deg, var(--bg-light-deep) 0%, var(--bg-light-horizon) 45%, var(--bg-light-horizon) 55%, var(--bg-light-deep) 100%);
+  /* Elegant Light Gradient (off-white to sand) */
+  --bg-light-top: #FDFCFB;      /* Warm off-white */
+  --bg-light-mid: #F7F4F0;      /* Light sand/cream */
+  --bg-light-bottom: #FAF9F7;   /* Warm off-white */
+  --bg-gradient-light: linear-gradient(180deg, var(--bg-light-top) 0%, var(--bg-light-mid) 50%, var(--bg-light-bottom) 100%);
 
   /* Glass Design Variables */
   --lg-bg-color: rgba(255, 255, 255, 0.25);
@@ -112,6 +113,7 @@
   .qa-drawer { transition: none; }
   .qa-scrim { transition: none; }
   .content-safe-right { transition: none; }
+  body::before { animation: none; }
 }
 
 .bg-horizon-light {
@@ -171,17 +173,43 @@ html, body {
 }
 
 body {
-  background: var(--bg-gradient);
-  background-attachment: fixed;
+  background: transparent;
   color: var(--text-primary);
   min-height: 100vh;
   margin: 0;
   font-family: 'Inter', -apple-system, sans-serif;
+  position: relative;
+  z-index: 0;
 }
 
-body.theme-light {
+/* Animated gradient background - exact same colors, just alive */
+body::before {
+  content: "";
+  position: fixed;
+  inset: -10%;
+  z-index: -1;
+  background: var(--bg-gradient);
+  animation: gradientBreath 20s ease-in-out infinite;
+  will-change: transform;
+}
+
+@keyframes gradientBreath {
+  0%, 100% {
+    transform: scale(1) translateY(0);
+  }
+  33% {
+    transform: scale(1.03) translateY(-1%);
+  }
+  66% {
+    transform: scale(1.01) translateY(0.5%);
+  }
+}
+
+body.theme-light::before {
   background: var(--bg-gradient-light);
-  background-attachment: fixed;
+  animation: none;
+  transform: none;
+  inset: 0;
 }
 
 /* --- CHAT LAYOUT CSS (Adapted from Reference) --- */

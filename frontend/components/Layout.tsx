@@ -36,8 +36,8 @@ export default function Layout({
         className={`min-h-screen flex flex-col items-center ${
           isPage ? "justify-start" : "justify-center"
         } relative overflow-hidden ${mainClassName || ""} ${
-          showSidebar ? "ml-[210px]" : ""
-        } ${hasRightPanel ? "mr-[420px]" : ""}`}
+          showSidebar ? "ml-[234px]" : ""
+        } ${hasRightPanel ? "mr-[504px]" : ""}`}
       >
         <ThemeEffect theme={isPage ? "light" : "dark"} />
         {/* Left-hand nav / Logo (hidden when sidebar is shown) */}
@@ -62,9 +62,10 @@ export default function Layout({
             {rightSlot ?? (
               <Link
                 href="/archive"
-                className="text-sm font-medium text-white/90 hover:text-white hover:underline tracking-wide transition-colors font-mono"
+                className="flex items-center gap-2 text-[11px] font-mono uppercase tracking-wider text-white/70 hover:text-white transition-colors"
               >
-                View Archive
+                <span>View All</span>
+                <span>→</span>
               </Link>
             )}
           </div>

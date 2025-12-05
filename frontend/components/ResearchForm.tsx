@@ -14,14 +14,19 @@ function buildPayloadFromPrompt(prompt: string) {
   );
   const website = urlMatch ? urlMatch[0] : null;
 
-  // 2) Naive company name extraction
+  // 2) Naive company name extraction - remove website first to avoid pollution
+  let promptWithoutUrl = prompt;
+  if (website) {
+    promptWithoutUrl = prompt.replace(website, "").trim();
+  }
+
   let company_name = "";
-  const quotedMatch = prompt.match(/"([^"]+)"/);
+  const quotedMatch = promptWithoutUrl.match(/"([^"]+)"/);
   if (quotedMatch) {
     company_name = quotedMatch[1];
   } else {
-    const firstLine = prompt.split("\n")[0];
-    const stopChars = [".", "-", "—", ":", "("];
+    const firstLine = promptWithoutUrl.split("\n")[0];
+    const stopChars = ["-", "—", ":", "("];
     let endIndex = firstLine.length;
 
     for (const ch of stopChars) {
@@ -185,7 +190,7 @@ export default function ResearchForm({ onJobCreated }: Props) {
       {/* Chat Input Interface */}
       <form onSubmit={handleSubmit} className="chat-interface w-full relative pb-4">
         <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider font-mono text-white/80 mb-3">
-          <span>Mode:</span>
+          <span>Researching:</span>
           <button
             type="button"
             onClick={() => handleModeChange("company")}
@@ -213,7 +218,7 @@ export default function ResearchForm({ onJobCreated }: Props) {
           <div className="glass-bar">
             <textarea
               className="chat-input font-sans resize-none overflow-hidden h-auto min-h-[1.5em] max-h-[200px]"
-              placeholder={targetType === "person" ? "Enter person name or context..." : "Enter company name or query..."}
+              placeholder={targetType === "person" ? "Enter person name..." : "Enter company name and website..."}
               value={prompt}
               onChange={(e) => {
                 setPrompt(e.target.value);
@@ -239,26 +244,26 @@ export default function ResearchForm({ onJobCreated }: Props) {
         {/* Line Data Metadata */}
         <div className="mt-4 font-mono text-xs text-white/60 flex flex-wrap items-center gap-2 cursor-pointer hover:text-white/80 transition-colors" onClick={() => setShowAdvanced(!showAdvanced)}>
           <span className="hover:underline decoration-white/50 underline-offset-4">
-            Mode: {targetType === "person" ? "Person" : "Company"}
-          </span>
-          <span className="text-white/40">/</span>
-          <span className="hover:underline decoration-white/50 underline-offset-4">
             {targetType === "person"
-              ? `Person: ${displayPersonName || "—"}`
-              : `Company: ${effectiveCompanyName || "—"}`}
+              ? (displayPersonName || "—")
+              : (effectiveCompanyName || "—")}
           </span>
-          {targetType === "person" && (
+          {targetType === "person" && personLocation && (
             <>
               <span className="text-white/40">/</span>
               <span className="hover:underline decoration-white/50 underline-offset-4">
-                Location: {personLocation || "—"}
+                {personLocation}
               </span>
             </>
           )}
-          <span className="text-white/40">/</span>
-          <span className="hover:underline decoration-white/50 underline-offset-4">
-            Website: {effectiveWebsite || "—"}
-          </span>
+          {effectiveWebsite && (
+            <>
+              <span className="text-white/40">/</span>
+              <span className="hover:underline decoration-white/50 underline-offset-4">
+                {effectiveWebsite}
+              </span>
+            </>
+          )}
           <span className="text-white/40">/</span>
           <span className="text-[10px]">
             {prompt.length}/{MAX_CONTEXT_LENGTH}
@@ -297,49 +302,36 @@ export default function ResearchForm({ onJobCreated }: Props) {
 
         {/* Person fields - positioned absolutely to not affect centering */}
         <div 
-          className={`absolute left-0 right-0 top-full mt-4 grid grid-cols-1 md:grid-cols-3 gap-4 pt-4 border-t border-white/20 font-mono text-xs transition-all duration-300 ${
+          className={`absolute left-0 right-0 top-full mt-4 grid grid-cols-1 md:grid-cols-2 gap-4 pt-4 border-t border-white/20 font-mono text-xs transition-all duration-300 ${
             targetType === "person" 
               ? "opacity-100 translate-y-0 pointer-events-auto" 
               : "opacity-0 -translate-y-2 pointer-events-none"
           }`}
         >
-            <div className="md:col-span-1">
-            <label className="block mb-2 text-white/60 uppercase tracking-wider text-[10px]">
-                Person Name (Required)
-              </label>
-              <input
-                type="text"
-              className="w-full bg-transparent border-b border-white/30 py-1 text-white/90 focus:border-white/80 focus:outline-none transition-colors placeholder:text-white/30"
-                placeholder="Ada Lovelace"
-                value={personName}
-                onChange={(e) => setPersonName(e.target.value)}
-              tabIndex={targetType === "person" ? 0 : -1}
-              />
-            </div>
-            <div className="md:col-span-1">
-            <label className="block mb-2 text-white/60 uppercase tracking-wider text-[10px]">
+            <div>
+              <label className="block mb-2 text-white/60 uppercase tracking-wider text-[10px]">
                 Affiliated Company (Optional)
               </label>
               <input
                 type="text"
-              className="w-full bg-transparent border-b border-white/30 py-1 text-white/90 focus:border-white/80 focus:outline-none transition-colors placeholder:text-white/30"
+                className="w-full bg-transparent border-b border-white/30 py-1 text-white/90 focus:border-white/80 focus:outline-none transition-colors placeholder:text-white/30"
                 placeholder="OpenAI"
                 value={personAffiliation}
                 onChange={(e) => setPersonAffiliation(e.target.value)}
-              tabIndex={targetType === "person" ? 0 : -1}
+                tabIndex={targetType === "person" ? 0 : -1}
               />
             </div>
-            <div className="md:col-span-1">
-            <label className="block mb-2 text-white/60 uppercase tracking-wider text-[10px]">
+            <div>
+              <label className="block mb-2 text-white/60 uppercase tracking-wider text-[10px]">
                 Location (Optional)
               </label>
               <input
                 type="text"
-              className="w-full bg-transparent border-b border-white/30 py-1 text-white/90 focus:border-white/80 focus:outline-none transition-colors placeholder:text-white/30"
+                className="w-full bg-transparent border-b border-white/30 py-1 text-white/90 focus:border-white/80 focus:outline-none transition-colors placeholder:text-white/30"
                 placeholder="San Francisco, CA"
                 value={personLocation}
                 onChange={(e) => setPersonLocation(e.target.value)}
-              tabIndex={targetType === "person" ? 0 : -1}
+                tabIndex={targetType === "person" ? 0 : -1}
               />
             </div>
           </div>

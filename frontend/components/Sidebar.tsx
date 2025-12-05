@@ -35,52 +35,56 @@ export default function Sidebar({ currentJobId }: SidebarProps) {
     return input.company_name || input.context?.slice(0, 30) || "Untitled";
   };
 
+  const getJobType = (job: ArchiveJob) => {
+    return job.job.target_input.target_type === "person" ? "P" : "C";
+  };
+
   const isActive = (jobId: string) => {
     return currentJobId === jobId || pathname === `/research/${jobId}`;
   };
 
   return (
-    <aside className="fixed left-0 top-0 bottom-0 w-[210px] border-r border-gray-200/60 bg-white/50 backdrop-blur-sm flex flex-col z-40">
+    <aside className="fixed left-0 top-0 bottom-0 w-[210px] border-r border-stone-200 bg-stone-50/90 flex flex-col z-40">
       {/* Logo */}
-      <div className="p-5 border-b border-gray-200/60">
+      <div className="p-5 border-b border-stone-200">
         <Link href="/" className="block hover:opacity-70 transition-opacity">
           <img
             src="/logo.svg"
             alt="Serendipity Capital"
-            className="h-[28px] w-auto invert opacity-80"
+            className="h-[34px] w-auto invert opacity-80"
           />
         </Link>
       </div>
 
       {/* New Research Button */}
-      <div className="p-4">
+      <div className="p-4 border-b border-stone-200">
         <Link
           href="/"
-          className="flex items-center justify-center gap-2 w-full py-2.5 px-4 rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50 hover:border-gray-300 transition-all text-sm font-medium"
+          className="flex items-center justify-center gap-2 w-full py-2.5 px-4 border border-stone-300 text-gray-600 hover:bg-white hover:border-stone-400 hover:text-gray-900 transition-all font-mono text-xs uppercase tracking-wider"
         >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-          </svg>
-          New Research
+          <span>+</span>
+          <span>New Research</span>
         </Link>
       </div>
 
       {/* Recent Jobs */}
-      <div className="flex-1 overflow-y-auto px-3">
-        <div className="text-[10px] font-medium text-gray-400 uppercase tracking-wider px-2 mb-2">
+      <div className="flex-1 overflow-y-auto px-3 py-3">
+        <div className="font-mono text-[10px] uppercase tracking-wider text-gray-400 px-2 mb-3">
           Recent
         </div>
 
         {loading && (
-          <div className="space-y-2">
+          <div className="space-y-1 px-2">
             {[...Array(5)].map((_, i) => (
-              <div key={i} className="h-9 bg-gray-100 rounded-lg animate-pulse" />
+              <div key={i} className="h-8 bg-stone-100 animate-pulse" />
             ))}
           </div>
         )}
 
         {!loading && jobs.length === 0 && (
-          <p className="text-xs text-gray-400 px-2 py-4">No research yet</p>
+          <p className="font-mono text-[11px] text-gray-400 px-2 py-4">
+            No research yet
+          </p>
         )}
 
         {!loading && jobs.length > 0 && (
@@ -89,13 +93,18 @@ export default function Sidebar({ currentJobId }: SidebarProps) {
               <Link
                 key={job.job.id}
                 href={`/research/${job.job.id}`}
-                className={`block px-3 py-2 rounded-lg text-sm truncate transition-colors ${
+                className={`flex items-center gap-2 px-2 py-2 text-[15px] transition-colors ${
                   isActive(job.job.id)
-                    ? "bg-gray-100 text-gray-900 font-medium"
-                    : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                    ? "bg-white border-l-2 border-gray-900 text-gray-900"
+                    : "text-gray-600 hover:bg-white hover:text-gray-900 border-l-2 border-transparent"
                 }`}
               >
-                {getJobTitle(job)}
+                <span className="font-mono text-[10px] text-gray-400 w-4">
+                  {getJobType(job)}
+                </span>
+                <span className="truncate flex-1">
+                  {getJobTitle(job)}
+                </span>
               </Link>
             ))}
           </div>
@@ -103,22 +112,19 @@ export default function Sidebar({ currentJobId }: SidebarProps) {
       </div>
 
       {/* View All Archive */}
-      <div className="p-4 border-t border-gray-200/60">
+      <div className="p-4 border-t border-stone-200">
         <Link
           href="/archive"
-          className={`flex items-center gap-2 text-xs transition-colors ${
+          className={`flex items-center gap-2 font-mono text-[11px] uppercase tracking-wider transition-colors ${
             pathname === "/archive"
-              ? "text-gray-900 font-medium"
-              : "text-gray-500 hover:text-gray-700"
+              ? "text-gray-900"
+              : "text-gray-400 hover:text-gray-700"
           }`}
         >
-          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5M10 11.25h4M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125z" />
-          </svg>
-          View All
+          <span>→</span>
+          <span>View All</span>
         </Link>
       </div>
     </aside>
   );
 }
-

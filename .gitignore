@@ -108,3 +108,11 @@ frontend/.vercel
 
 # Railway specific (keep railway.json usually, but ignore CLI token caches)
 .railway/
+
+# ==============================================================================
+# AUDIT ARTIFACTS
+# ==============================================================================
+audit_artifacts/
+audit_artifacts_2/
+audit_report.md
+audit_report_2.md

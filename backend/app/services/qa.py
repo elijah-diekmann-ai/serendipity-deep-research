@@ -1,20 +1,37 @@
 from uuid import UUID
+from dataclasses import dataclass
 from sqlalchemy.orm import Session
 import json
 import logging
 import re
 from typing import Tuple, Set, List, Optional
+
 from urllib.parse import urlparse
 
 from ..models.research_job import ResearchJob, JobStatus
 from ..models.source import Source
 from ..models.research_qa import ResearchQA
+from ..models.research_qa_plan import ResearchQAPlan, PlanStatus
 from .writer import Writer
 from .entity_resolution import KnowledgeGraph, CompanyNode, PersonTargetNode
 from .llm_costs import LLMCostTracker
 from .tracing import trace_job_step
+from .qa_gap import detect_gap, GapDetectionResult
+from .micro_planner import propose_micro_plan, MicroPlan
+from .micro_plan_validate import validate_and_estimate, ValidationResult
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Q&A Result with Optional Micro-Research Plan
+# ---------------------------------------------------------------------------
+
+@dataclass
+class QAResult:
+    """Result of Q&A with optional micro-research plan proposal."""
+    qa_row: ResearchQA
+    research_plan: Optional[ResearchQAPlan] = None
 
 # ---------------------------------------------------------------------------
 # Raw Source Access Configuration
@@ -536,4 +553,166 @@ def answer_research_question(
     )
 
     return qa_row
+
+
+def answer_with_micro_research_proposal(
+    db: Session,
+    job: ResearchJob,
+    question: str,
+    request_id: str | None = None,
+) -> QAResult:
+    """
+    Answer a research question with optional micro-research plan proposal.
+    
+    This wraps answer_research_question and adds:
+    1. Gap detection on the answer
+    2. If gap detected, propose a micro-research plan
+    3. Return both the answer and optional plan
+    
+    The plan is NOT executed automatically - the user must confirm via
+    the /qa/research/{plan_id}/run endpoint.
+    
+    Args:
+        db: Database session
+        job: The completed research job
+        question: User's question
+        request_id: Optional correlation ID
+        
+    Returns:
+        QAResult with qa_row and optional research_plan
+    """
+    # 1. Generate the answer (existing flow)
+    qa_row = answer_research_question(
+        db=db,
+        job=job,
+        question=question,
+        request_id=request_id,
+    )
+    
+    # 2. Load all sources for gap detection
+    sources: list[Source] = (
+        db.query(Source).filter(Source.job_id == job.id).all()
+    )
+    used_source_ids = set(qa_row.used_source_ids or [])
+    
+    # 3. Detect gaps
+    gap_result = detect_gap(
+        question=question,
+        answer_markdown=qa_row.answer_markdown,
+        used_source_ids=used_source_ids,
+        all_sources=sources,
+    )
+    
+    # 4. If no gap, return answer only
+    if not gap_result.should_propose:
+        logger.debug("No gap detected, returning answer without plan")
+        return QAResult(qa_row=qa_row, research_plan=None)
+    
+    # 5. Trace gap detection
+    trace_job_step(
+        job.id,
+        phase="QA",
+        step="qa_gap_detected",
+        label="Gap detected in Q&A answer",
+        detail=gap_result.gap_statement[:200],
+        meta={
+            "intent": gap_result.intent,
+            "confidence": gap_result.confidence,
+            "detection_method": gap_result.detection_method,
+        },
+    )
+    
+    # 6. Propose micro-research plan
+    target_input = job.target_input or {}
+    
+    # Extract existing source context for micro-planner to avoid redundant queries
+    existing_providers: set[str] = set()
+    existing_domains: set[str] = set()
+    for src in sources:
+        if src.provider:
+            existing_providers.add(src.provider.lower())
+        if src.url:
+            try:
+                parsed = urlparse(src.url)
+                if parsed.netloc:
+                    existing_domains.add(parsed.netloc.lower())
+            except Exception:
+                pass
+    
+    try:
+        micro_plan = propose_micro_plan(
+            question=question,
+            gap_result=gap_result,
+            target_input=target_input,
+            existing_sources=sources,
+            existing_providers=existing_providers,
+            existing_domains=existing_domains,
+        )
+    except Exception as e:
+        logger.exception("Failed to propose micro-plan: %s", e)
+        # Return answer without plan if planning fails
+        return QAResult(qa_row=qa_row, research_plan=None)
+    
+    if not micro_plan.plan_steps:
+        logger.warning("Micro-planner returned no steps, skipping plan proposal")
+        return QAResult(qa_row=qa_row, research_plan=None)
+    
+    # 7. Validate and estimate cost
+    validation = validate_and_estimate(
+        plan_steps=micro_plan.plan_steps,
+        target_input=target_input,
+    )
+    
+    if not validation.is_valid:
+        logger.warning(
+            "Micro-plan validation failed: %s",
+            [e.message for e in validation.errors],
+        )
+        # Still propose but log the issues
+        for err in validation.errors:
+            logger.warning("Plan validation error: %s - %s", err.field, err.message)
+    
+    # 8. Persist the plan
+    plan = ResearchQAPlan(
+        job_id=job.id,
+        qa_id=qa_row.id,
+        question=question,
+        gap_statement=micro_plan.gap_statement,
+        intent=micro_plan.intent,
+        plan_steps_json=micro_plan.plan_steps,
+        plan_markdown=micro_plan.plan_markdown,
+        status=PlanStatus.PROPOSED,
+        estimated_cost_label=validation.cost_label,
+    )
+    db.add(plan)
+    db.commit()
+    db.refresh(plan)
+    
+    # 9. Trace plan proposal
+    trace_job_step(
+        job.id,
+        phase="QA",
+        step="micro_plan_proposed",
+        label="Micro-research plan proposed",
+        detail=f"Plan with {len(micro_plan.plan_steps)} steps proposed.",
+        meta={
+            "plan_id": str(plan.id),
+            "estimated_cost": validation.cost_label,
+            "steps": len(micro_plan.plan_steps),
+        },
+    )
+    
+    logger.info(
+        "Micro-research plan proposed: plan_id=%s, steps=%d, cost=%s",
+        plan.id,
+        len(micro_plan.plan_steps),
+        validation.cost_label,
+        extra={
+            "plan_id": str(plan.id),
+            "steps": len(micro_plan.plan_steps),
+            "cost_label": validation.cost_label,
+        },
+    )
+    
+    return QAResult(qa_row=qa_row, research_plan=plan)
 
